@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+.env/
+
+# Dataset
+training/raw/
+training/data/
+
+# Model weights (optional if large)
+*.pth
+*.pt
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# VSCode settings
+.vscode/
