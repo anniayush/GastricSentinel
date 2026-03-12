@@ -16,50 +16,61 @@ except ImportError:
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-
 def generate_shap(model, image_path, clinical=None, genomic=None):
+    """
+    Generates a SHAP explanation heatmap for the predicted class.
+    Correctly handles both base ResNet50 and FusionModel architectures.
+    """
     if shap is None or cv2 is None:
         return None
 
-    img_tensor = preprocess_image(image_path).to(device).requires_grad_(True)
-    background = torch.zeros_like(img_tensor)
+    img_tensor = preprocess_image(image_path).to(device)
+    # Using a zero-tensor as background; for better results, use a small batch of training data
+    background = torch.zeros_like(img_tensor).to(device)
 
+    # Check if we are using the FusionModel
     is_fusion = hasattr(model, "clinical_net")
 
-    with torch.no_grad():
-        if is_fusion and clinical is not None and genomic is not None:
-            from model_loader import load_feature_extractor
-            _feat_ext = load_feature_extractor().to(device)
-            _feat_ext.eval()
-            feat = _feat_ext(img_tensor).view(img_tensor.size(0), -1)
-            out = model(feat, clinical, genomic)
-        else:
-            out = model(img_tensor)
-        pred_idx = int(torch.argmax(out, dim=1).item())
+    # Define a wrapper to ensure SHAP passes data through the correct forward path
+    def model_wrapper(x):
+        with torch.no_grad():
+            if is_fusion and clinical is not None and genomic is not None:
+                # For Fusion, we must pass through feature_extractor then the fusion head
+                # Note: We use the existing tensors provided by the predict function
+                from predict import feature_extractor
+                feat = feature_extractor(x).view(x.size(0), -1)
+                return model(feat, clinical, genomic)
+            return model(x)
 
-    def model_forward(x):
-        if is_fusion and clinical is not None and genomic is not None:
-            from model_loader import load_feature_extractor
-            _fe = load_feature_extractor().to(device)
-            _fe.eval()
-            f = _fe(x).view(x.size(0), -1)
-            return model(f, clinical, genomic)
-        return model(x)
-
-    explainer = shap.DeepExplainer(model_forward, background)
+    # Initialize Explainer
+    explainer = shap.DeepExplainer(model_wrapper, background)
+    
+    # img_tensor requires_grad for DeepExplainer (gradient-based)
+    img_tensor.requires_grad = True
     shap_values = explainer.shap_values(img_tensor)
 
+    # Get the predicted index to visualize the correct class map
+    with torch.no_grad():
+        output = model_wrapper(img_tensor)
+        pred_idx = int(torch.argmax(output, dim=1).item())
+
+    # Process SHAP values: list of arrays [classes][batch, channels, height, width]
+    # We take the map for the predicted class
     shap_map = shap_values[pred_idx][0]
+    
+    # Collapse channels and normalize
     shap_map = np.mean(shap_map, axis=0)
     shap_map = shap_map - shap_map.min()
     shap_map = shap_map / (shap_map.max() + 1e-8)
     shap_map = cv2.resize(shap_map, (512, 512))
 
+    # Create overlay
     from PIL import Image
     img = np.array(Image.open(image_path).convert("RGB").resize((512, 512)))
     heatmap = cv2.applyColorMap(np.uint8(255 * shap_map), cv2.COLORMAP_PLASMA)
     overlay = cv2.addWeighted(img, 0.65, heatmap, 0.35, 0)
 
+    # Save to static directory
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     save_dir = os.path.join(base_dir, "frontend", "static", "uploads")
     os.makedirs(save_dir, exist_ok=True)
@@ -73,71 +84,39 @@ def generate_shap(model, image_path, clinical=None, genomic=None):
 
     return f"/static/uploads/{filename}"
 
-
-def get_shap_values_per_class(model, image_path, label_map, clinical=None, genomic=None):
+def get_class_shap_scores(model, image_path, label_map, clinical=None, genomic=None):
+    """
+    Returns global importance scores per class based on SHAP values.
+    """
     if shap is None:
         return None
 
-    img_tensor = preprocess_image(image_path).to(device).requires_grad_(True)
-    background = torch.zeros_like(img_tensor)
+    img_tensor = preprocess_image(image_path).to(device)
+    background = torch.zeros_like(img_tensor).to(device)
+    
+    is_fusion = hasattr(model, "clinical_net")
 
-    def model_forward(x):
-        if clinical is not None and genomic is not None:
-            return model(x, clinical, genomic)
+    def _forward(x):
+        if is_fusion and clinical is not None and genomic is not None:
+            from predict import feature_extractor
+            f = feature_extractor(x).view(x.size(0), -1)
+            return model(f, clinical, genomic)
         return model(x)
 
-    explainer = shap.DeepExplainer(model_forward, background)
-    shap_values = explainer.shap_values(img_tensor)
+    try:
+        img_tensor.requires_grad = True
+        explainer = shap.DeepExplainer(_forward, background)
+        shap_vals = explainer.shap_values(img_tensor)
 
-    result = {}
-    for i, cls in enumerate(label_map):
-        class_shap = shap_values[i][0]
-        result[cls] = float(np.mean(np.abs(class_shap)))
-
-    total = sum(result.values()) + 1e-8
-    result = {k: round(v / total, 4) for k, v in result.items()}
-
-    return result
-
-
-def get_class_shap_scores(image_path, label_map):
-    """
-    Returns per-class SHAP attribution scores as a normalised dict.
-    Uses base ResNet50 (has trained weights).
-    Falls back to softmax-deviation approximation if SHAP library is unavailable.
-    """
-    from utils import preprocess_image as _preprocess
-    import torch, torch.nn.functional as F
-    from model_loader import load_model
-
-    # Always use base ResNet50 — it has trained weights and layer4 for SHAP
-    cnn_model = load_model()
-    cnn_model.eval()
-
-    img_tensor = _preprocess(image_path)
-
-    # Try real SHAP first (DeepExplainer)
-    if shap is not None:
-        try:
-            background = torch.zeros_like(img_tensor)
-
-            def _forward(x):
-                return cnn_model(x)
-
-            explainer   = shap.DeepExplainer(_forward, background)
-            shap_vals   = explainer.shap_values(img_tensor)  # list of [1,C,H,W] per class
-            result = {}
-            for i, cls in enumerate(label_map):
-                class_map = shap_vals[i][0]                    # shape [C,H,W]
-                result[cls] = float(np.mean(np.abs(class_map)))
-            total = sum(result.values()) + 1e-8
-            return {k: round(v / total, 4) for k, v in result.items()}
-        except Exception as e:
-            print(f"[SHAP] DeepExplainer failed ({e}), using softmax approximation")
-
-    # Fallback: derive from softmax probabilities (signed deviation from uniform baseline)
-    with torch.no_grad():
-        logits = cnn_model(img_tensor)
-        probs  = F.softmax(logits, dim=1)[0]
-    baseline = 1.0 / len(label_map)
-    return {cls: round(float((probs[i] - baseline) * 1.2), 4) for i, cls in enumerate(label_map)}
+        result = {}
+        for i, cls in enumerate(label_map):
+            # Mean absolute SHAP value represents feature importance for that class
+            class_map = shap_vals[i][0]
+            result[cls] = float(np.mean(np.abs(class_map)))
+        
+        total = sum(result.values()) + 1e-8
+        return {k: round(v / total, 4) for k, v in result.items()}
+    
+    except Exception as e:
+        print(f"SHAP Score Error: {e}")
+        return None
