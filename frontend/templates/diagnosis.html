@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gastric Sentinel — AI Diagnosis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<div id="toastContainer" class="toast-container"></div>
+<div id="sidebarOverlay" class="sidebar-overlay"></div>
+
+<div class="app-shell">
+
+  <!-- ── SIDEBAR ── -->
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-logo-wrap">
+        <img class="brand-logo" src="{{ url_for('static', filename='logo.png') }}" alt="Gastric Sentinel" onerror="this.classList.add('errored')">
+        <div class="brand-pulse-fallback">🫀</div>
+      </div>
+      <div class="brand-text">
+        <div class="brand-name">Gastric <em>Sentinel</em></div>
+        <div class="brand-tag">AI Diagnostic Platform</div>
+      </div>
+    </div>
+    <div class="nav-section">
+      <div class="nav-section-label">Navigation</div>
+      <a class="nav-link" href="/dashboard"><span class="nav-icon">📊</span> Dashboard</a>
+      <a class="nav-link" href="/patients"><span class="nav-icon">👥</span> Patients</a>
+      <a class="nav-link active" href="/diagnosis"><span class="nav-icon">🔬</span> AI Diagnosis</a>
+    </div>
+    <div class="nav-section">
+      <div class="nav-section-label">Analytics</div>
+      <a class="nav-link" href="#" onclick="event.preventDefault();openReports()"><span class="nav-icon">📈</span> Reports</a>
+      <a class="nav-link" href="#" onclick="event.preventDefault();openRiskAlerts()"><span class="nav-icon">⚠️</span> Risk Alerts<span class="nav-badge">12</span></a>
+      <a class="nav-link" href="#" onclick="event.preventDefault();openSettings()"><span class="nav-icon">⚙️</span> Settings</a>
+    </div>
+    <div class="sidebar-footer">
+      <button class="theme-btn" id="themeToggle">
+        <span class="theme-icon" id="themeIcon">🌙</span>
+        <span id="themeLabel">Dark Mode</span>
+        <div class="toggle-pill"></div>
+      </button>
+    </div>
+  </nav>
+
+  <div class="main-wrap">
+
+    <header class="topbar">
+      <button class="menu-toggle" id="menuToggle">☰</button>
+      <div>
+        <div class="topbar-page-title">AI Diagnosis</div>
+        <div class="topbar-breadcrumb">/ tissue analysis</div>
+      </div>
+      <div class="topbar-search">
+        <span style="color:var(--tx3)">🔍</span>
+        <input placeholder="Search…" autocomplete="off">
+      </div>
+      <div class="topbar-right">
+        <div class="status-chip"><div class="status-dot"></div> Model v3.2</div>
+        <div class="top-icon-btn" id="notifBell" style="cursor:pointer">🔔<div class="notif-dot"></div></div>
+        <div class="avatar-btn">DR</div>
+        <div id="liveClock" class="mono" style="font-size:.72rem;color:var(--tx3);white-space:nowrap"></div>
+      </div>
+    </header>
+
+    <main class="page">
+
+      <div class="page-header anim-in">
+        <h1 class="page-title">AI Tissue <span>Diagnosis</span></h1>
+        <p class="page-desc">Histopathology image analysis with GradCAM &amp; SHAP explainability · EfficientNet-B4 backbone</p>
+      </div>
+
+      <div class="grid-diag" style="gap:1.2rem">
+
+        <!-- LEFT COLUMN -->
+        <div style="display:flex;flex-direction:column;gap:1rem">
+
+          <!-- Upload -->
+          <div class="card anim-in">
+            <div class="card-hd">
+              <div class="card-label">Image Upload</div>
+              <span class="badge badge-cyan">Drag & Drop Enabled</span>
+            </div>
+            <div class="upload-zone" id="dropZone">
+              <input type="file" id="fileInput" multiple accept="image/*">
+              <div class="upload-icon-wrap">🔬</div>
+              <div class="upload-title"><strong>Drop histopathology images</strong> or click to browse</div>
+              <div class="upload-hint mt-1">Supports JPEG, PNG, TIFF · Max 20MB per file</div>
+              <div class="upload-preview" id="uploadPreview"></div>
+            </div>
+            <div class="flex gap-1 mt-2" style="flex-wrap:wrap">
+              <button class="btn btn-primary" id="scanBtn" style="flex:1;justify-content:center">
+                🔬 Run AI Scan
+              </button>
+              <button class="btn btn-ghost" id="batchUploadBtn" title="Batch analyse multiple images at once">
+                📦 Batch
+              </button>
+              <button class="btn btn-ghost" onclick="document.getElementById('fileInput').value='';document.getElementById('uploadPreview').innerHTML='';showToast('Upload cleared','info')">
+                🗑 Clear
+              </button>
+            </div>
+          </div>
+
+          <!-- Analysis Steps -->
+          <div class="card anim-in" id="stepsCard">
+            <div class="card-hd"><div class="card-label">Analysis Pipeline</div></div>
+            <div class="analysis-steps" id="analysisSteps">
+              <div class="step-item pending">
+                <div class="step-icon">1</div>
+                <span>Image preprocessing & normalisation</span>
+              </div>
+              <div class="step-item pending">
+                <div class="step-icon">2</div>
+                <span>Feature extraction · EfficientNet-B4</span>
+              </div>
+              <div class="step-item pending">
+                <div class="step-icon">3</div>
+                <span>Classification · Softmax output</span>
+              </div>
+              <div class="step-item pending">
+                <div class="step-icon">4</div>
+                <span>GradCAM saliency map generation</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Diagnosis Result -->
+          <div id="resultBox" class="hidden">
+            <div class="result-box anim-in">
+              <div class="result-box-head">
+                <span style="font-size:1.2rem">🧬</span>
+                <div>
+                  <div class="card-label">AI Diagnosis Result</div>
+                </div>
+                <span id="riskLabel" class="badge badge-red" style="margin-left:auto">Risk: —</span>
+              </div>
+              <div class="result-box-body">
+                <div class="diag-text" id="diagnosisText">—</div>
+                <div class="rec-text mt-1" id="recommendationText">—</div>
+              </div>
+            </div>
+
+            <!-- Doctor Feedback -->
+            <div class="card mt-2 anim-in">
+              <div class="card-hd"><div class="card-label">Doctor Feedback</div></div>
+              <div id="feedbackArea">
+                <div class="feedback-form">
+                  <div>
+                    <div style="font-size:.78rem;color:var(--tx3);margin-bottom:.35rem;font-family:'JetBrains Mono',monospace;text-transform:uppercase;letter-spacing:.06em">Rate Diagnosis Accuracy</div>
+                    <div class="stars">
+                      <span class="star" data-i="0">★</span>
+                      <span class="star" data-i="1">★</span>
+                      <span class="star" data-i="2">★</span>
+                      <span class="star" data-i="3">★</span>
+                      <span class="star" data-i="4">★</span>
+                    </div>
+                  </div>
+                  <textarea class="form-control feedback-form" id="feedbackNotes" placeholder="Clinical notes, corrections, or observations…"></textarea>
+                  <div class="feedback-actions">
+                    <button class="btn btn-green" id="confirmBtn">✅ Confirm Diagnosis</button>
+                    <button class="btn btn-danger" id="incorrectBtn">🔄 Mark Incorrect</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- RIGHT COLUMN -->
+        <div style="display:flex;flex-direction:column;gap:1rem">
+
+          <!-- Risk Score Gauge -->
+          <div class="card anim-in">
+            <div class="card-hd"><div class="card-label">Risk Score</div></div>
+            <div class="risk-gauge-wrap">
+              <div class="risk-gauge">
+                <svg class="gauge-svg" viewBox="0 0 120 60">
+                  <!-- Background arc -->
+                  <path d="M 10 58 A 50 50 0 0 1 110 58"
+                    fill="none" stroke="var(--bg4)" stroke-width="10"
+                    stroke-linecap="round"/>
+                  <!-- Filled arc -->
+                  <path id="gaugeArc"
+                    d="M 10 58 A 50 50 0 0 1 110 58"
+                    fill="none" stroke="var(--c2)" stroke-width="10"
+                    stroke-linecap="round"
+                    stroke-dasharray="157" stroke-dashoffset="157"
+                    style="transition:stroke-dashoffset 1.2s ease,stroke .3s"/>
+                </svg>
+              </div>
+              <div class="gauge-score"><span id="gaugeScore">0</span></div>
+              <div class="gauge-label">Risk Score · 0–100</div>
+            </div>
+            <div class="risk-row mt-2" id="riskBarRow">
+              <div class="risk-info">
+                <span class="risk-name">Overall Malignancy Risk</span>
+                <span class="risk-pct" id="riskValue">0%</span>
+              </div>
+              <div class="risk-track">
+                <div class="risk-fill high" id="riskFill" style="width:0"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Probability Chart -->
+          <div class="card anim-in">
+            <div class="card-hd">
+              <div class="card-label">Class Probabilities</div>
+              <span class="mono" style="font-size:.68rem;color:var(--tx3)">Softmax output</span>
+            </div>
+            <div class="prob-list" id="probList">
+              <!-- Populated by JS after scan -->
+              <div style="text-align:center;padding:1.5rem 0;color:var(--tx3);font-size:.82rem;font-family:'JetBrains Mono',monospace">
+                Run a scan to see probabilities
+              </div>
+            </div>
+          </div>
+
+          <!-- GradCAM -->
+          <div class="card anim-in">
+            <div class="card-hd">
+              <div class="card-label">Explainable AI · GradCAM</div>
+              <button class="btn btn-ghost btn-sm" id="toggleHeatBtn">👁 Hide Heatmap</button>
+            </div>
+            <div class="gradcam-wrap" id="gradcamWrap">
+              <div class="gradcam-placeholder">
+                <span style="font-size:2rem">🌡</span>
+                <span>GradCAM heatmap will appear after scan</span>
+              </div>
+            </div>
+            <div class="gradcam-toolbar mt-2">
+              <div class="heatmap-legend">
+                <span>Cold</span>
+                <div class="heatbar"></div>
+                <span>Hot</span>
+              </div>
+              <button class="btn btn-ghost btn-sm" onclick="const img=document.querySelector('#gradcamWrap img');if(img)openZoomViewer(img.src,'GradCAM — Pathology Scan');else showToast('Run a scan first to use zoom','warn')" style="margin-left:.5rem">🔍 Zoom</button>
+            </div>
+            <div class="alert alert-info mt-2" style="font-size:.78rem;margin-bottom:0">
+              ℹ️ Red/orange regions indicate highest model attention — areas most influential for the diagnosis.
+            </div>
+          </div>
+
+          <!-- Confidence Trend Chart -->
+          <div class="card anim-in">
+            <div class="card-hd">
+              <div class="card-label">Confidence Trend</div>
+              <button class="btn btn-ghost btn-sm" onclick="clearTrendData()" title="Clear history" style="font-size:.72rem">🗑 Clear</button>
+            </div>
+            <div id="trendChart" style="min-height:80px">
+              <div style="text-align:center;padding:2rem 0;color:var(--tx3);font-size:.82rem;font-family:'JetBrains Mono',monospace">Run at least 2 scans to see the confidence trend</div>
+            </div>
+          </div>
+
+          <!-- Download -->
+          <div class="card anim-in">
+            <div class="card-hd"><div class="card-label">PDF Report</div></div>
+            <p style="font-size:.84rem;color:var(--tx2);margin-bottom:1rem;line-height:1.5">
+              Enter patient details and generate a comprehensive clinical report with diagnosis, GradCAM, risk scores and recommendations.
+            </p>
+            <button class="btn btn-amber w-full" id="downloadReport" style="justify-content:center">
+              📄 Download PDF Report
+            </button>
+          </div>
+
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<!-- Chatbot -->
+<div class="chatbot-panel">
+  <div class="chat-window hidden" id="chatWindow">
+    <div class="chat-head">
+      <div class="chat-head-icon">🤖</div>
+      <div class="chat-head-info">
+        <div class="chat-name">MediAI Assistant</div>
+        <div class="chat-status">● Online · Diagnosis Mode</div>
+      </div>
+      <button class="chat-close" id="chatClose">✕</button>
+    </div>
+    <div class="chat-body" id="chatBody">
+      <div class="chat-msg ai">
+        <div class="c-av">🤖</div>
+        <div class="c-bubble">Upload an image and run a scan — I'll provide clinical insights on the diagnosis results and GradCAM findings.</div>
+      </div>
+    </div>
+    <div class="chat-footer">
+      <input class="chat-input" id="chatInput" placeholder="Ask about the diagnosis…">
+      <button class="chat-send" id="chatSend">➤</button>
+    </div>
+  </div>
+  <button class="chat-fab" id="chatFab">
+    🤖<div class="fab-dot"></div>
+  </button>
+</div>
+
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

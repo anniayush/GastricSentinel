@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gastric Sentinel — Patients</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<div id="toastContainer" class="toast-container"></div>
+<div id="sidebarOverlay" class="sidebar-overlay"></div>
+
+<div class="app-shell">
+
+  <!-- ── SIDEBAR ── -->
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-logo-wrap">
+        <img class="brand-logo" src="{{ url_for('static', filename='logo.png') }}" alt="Gastric Sentinel" onerror="this.classList.add('errored')">
+        <div class="brand-pulse-fallback">🫀</div>
+      </div>
+      <div class="brand-text">
+        <div class="brand-name">Gastric <em>Sentinel</em></div>
+        <div class="brand-tag">AI Diagnostic Platform</div>
+      </div>
+    </div>
+    <div class="nav-section">
+      <div class="nav-section-label">Navigation</div>
+      <a class="nav-link" href="/dashboard"><span class="nav-icon">📊</span> Dashboard</a>
+      <a class="nav-link active" href="/patients"><span class="nav-icon">👥</span> Patients<span class="nav-badge">248</span></a>
+      <a class="nav-link" href="/diagnosis"><span class="nav-icon">🔬</span> AI Diagnosis</a>
+    </div>
+    <div class="nav-section">
+      <div class="nav-section-label">Analytics</div>
+      <a class="nav-link" href="#" onclick="event.preventDefault();openReports()"><span class="nav-icon">📈</span> Reports</a>
+      <a class="nav-link" href="#" onclick="event.preventDefault();openRiskAlerts()"><span class="nav-icon">⚠️</span> Risk Alerts<span class="nav-badge">12</span></a>
+      <a class="nav-link" href="#" onclick="event.preventDefault();openSettings()"><span class="nav-icon">⚙️</span> Settings</a>
+    </div>
+    <div class="sidebar-footer">
+      <button class="theme-btn" id="themeToggle">
+        <span class="theme-icon" id="themeIcon">🌙</span>
+        <span id="themeLabel">Dark Mode</span>
+        <div class="toggle-pill"></div>
+      </button>
+    </div>
+  </nav>
+
+  <div class="main-wrap">
+
+    <header class="topbar">
+      <button class="menu-toggle" id="menuToggle">☰</button>
+      <div>
+        <div class="topbar-page-title">Patient Database</div>
+        <div class="topbar-breadcrumb">/ records</div>
+      </div>
+      <div class="topbar-search">
+        <span style="color:var(--tx3)">🔍</span>
+        <input id="globalSearch" placeholder="Search by name, ID, diagnosis…" autocomplete="off">
+      </div>
+      <div class="topbar-right">
+        <div class="status-chip"><div class="status-dot"></div> 248 Active</div>
+        <div class="top-icon-btn" id="notifBell" style="cursor:pointer">🔔<div class="notif-dot"></div></div>
+        <div class="avatar-btn">DR</div>
+        <div id="liveClock" class="mono" style="font-size:.72rem;color:var(--tx3);white-space:nowrap"></div>
+      </div>
+    </header>
+
+    <main class="page">
+
+      <div class="page-header anim-in">
+        <h1 class="page-title">Patient <span>Database</span></h1>
+        <p class="page-desc">Manage patient records, track diagnoses and risk stratification</p>
+      </div>
+
+      <!-- Stats row — populated by loadPatientStats() -->
+      <div class="stats-grid anim-in" style="margin-bottom:1.5rem">
+        <div class="stat-card s-cyan">
+          <div class="stat-bg-icon">👥</div>
+          <div class="stat-chip">Total Patients</div>
+          <div class="stat-num text-cyan" id="ptStatTotal">—</div>
+          <div class="stat-sub">All records</div>
+        </div>
+        <div class="stat-card s-red">
+          <div class="stat-bg-icon">⚠️</div>
+          <div class="stat-chip">High Risk</div>
+          <div class="stat-num text-red" id="ptStatHigh">—</div>
+          <div class="stat-sub">Needs attention</div>
+        </div>
+        <div class="stat-card s-amber">
+          <div class="stat-bg-icon">🔶</div>
+          <div class="stat-chip">Medium Risk</div>
+          <div class="stat-num text-amber" id="ptStatMid">—</div>
+          <div class="stat-sub">Under monitoring</div>
+        </div>
+        <div class="stat-card s-green">
+          <div class="stat-bg-icon">✅</div>
+          <div class="stat-chip">Low Risk</div>
+          <div class="stat-num text-green" id="ptStatLow">—</div>
+          <div class="stat-sub">Routine follow-up</div>
+        </div>
+      </div>
+
+      <!-- Controls -->
+      <div class="card anim-in" style="margin-bottom:1rem">
+        <div class="flex items-center gap-2 flex-wrap justify-between">
+          <div class="flex gap-1 flex-wrap">
+            <button class="btn btn-ghost btn-sm filter-btn active" onclick="filterPatients('all')">All</button>
+            <button class="btn btn-ghost btn-sm filter-btn" onclick="filterPatients('high')">⚠️ High Risk</button>
+            <button class="btn btn-ghost btn-sm filter-btn" onclick="filterPatients('medium')">🔶 Medium</button>
+            <button class="btn btn-ghost btn-sm filter-btn" onclick="filterPatients('low')">✅ Low Risk</button>
+            <button class="btn btn-ghost btn-sm filter-btn" onclick="filterPatients('new')">🆕 New</button>
+          </div>
+          <div class="flex gap-1">
+            <button class="btn btn-ghost btn-sm" onclick="exportCSV()">📥 Export CSV</button>
+            <button class="btn btn-primary btn-sm" onclick="openAddPatient()">+ Add Patient</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Table -->
+      <div class="card anim-in">
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Patient ID</th>
+                <th>Name</th>
+                <th>Age</th>
+                <th>Gender</th>
+                <th>Last Diagnosis</th>
+                <th>Risk Level</th>
+                <th>Last Scan</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="patientsTable">
+              <tr><td colspan="8" style="text-align:center;padding:2.5rem;color:var(--tx3)">
+                <span class="mono" style="font-size:.8rem">Loading patient records…</span>
+              </td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Pagination -->
+        <div class="flex items-center justify-between" style="padding-top:1rem;border-top:1px solid var(--border);margin-top:.5rem">
+          <span style="font-size:.8rem;color:var(--tx3);font-family:'JetBrains Mono',monospace">
+            Showing 1–6 of 248 patients
+          </span>
+          <div class="flex gap-1">
+            <button class="btn btn-ghost btn-sm" onclick="showToast('← Previous page','info')">← Prev</button>
+            <button class="btn btn-primary btn-sm" style="min-width:36px;justify-content:center">1</button>
+            <button class="btn btn-ghost btn-sm" style="min-width:36px;justify-content:center">2</button>
+            <button class="btn btn-ghost btn-sm" style="min-width:36px;justify-content:center">3</button>
+            <button class="btn btn-ghost btn-sm" onclick="showToast('→ Next page','info')">Next →</button>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<!-- Add Patient Modal -->
+<div class="modal-backdrop" id="patientModal">
+  <div class="modal">
+    <div class="modal-hd">
+      <div class="modal-title">Register New Patient</div>
+      <button class="modal-x" id="modalCloseBtn">✕</button>
+    </div>
+
+    <div class="form-grid2">
+      <div class="form-row">
+        <label class="form-label">Full Name *</label>
+        <input class="form-control" id="nameInput" placeholder="e.g. Sunita Patel" autocomplete="off">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Age *</label>
+        <input class="form-control" id="ageInput" type="number" placeholder="e.g. 52" min="1" max="120">
+      </div>
+    </div>
+
+    <div class="form-grid2">
+      <div class="form-row">
+        <label class="form-label">Gender</label>
+        <select class="form-control" id="genderInput">
+          <option value="Male">Male</option>
+          <option value="Female">Female</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label class="form-label">Blood Group</label>
+        <select class="form-control">
+          <option>A+</option><option>A−</option>
+          <option>B+</option><option>B−</option>
+          <option>O+</option><option>O−</option>
+          <option>AB+</option><option>AB−</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <label class="form-label">Condition / Presenting Complaint</label>
+      <input class="form-control" id="condInput" placeholder="e.g. Epigastric pain, weight loss">
+    </div>
+
+    <div class="form-row">
+      <label class="form-label">Notes</label>
+      <textarea class="form-control" style="width:100%;min-height:60px;resize:vertical" placeholder="Additional clinical notes…"></textarea>
+    </div>
+
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeModal('patientModal')">Cancel</button>
+      <button class="btn btn-primary" id="addPatientBtn">Register Patient</button>
+    </div>
+  </div>
+</div>
+
+<!-- Chatbot -->
+<div class="chatbot-panel">
+  <div class="chat-window hidden" id="chatWindow">
+    <div class="chat-head">
+      <div class="chat-head-icon">🤖</div>
+      <div class="chat-head-info">
+        <div class="chat-name">MediAI Assistant</div>
+        <div class="chat-status">● Online · Patient Mode</div>
+      </div>
+      <button class="chat-close" id="chatClose">✕</button>
+    </div>
+    <div class="chat-body" id="chatBody">
+      <div class="chat-msg ai">
+        <div class="c-av">🤖</div>
+        <div class="c-bubble">Hello! I can help you look up patient records, summarize risk profiles, or answer clinical questions about gastric oncology.</div>
+      </div>
+    </div>
+    <div class="chat-footer">
+      <input class="chat-input" id="chatInput" placeholder="Ask about a patient…">
+      <button class="chat-send" id="chatSend">➤</button>
+    </div>
+  </div>
+  <button class="chat-fab" id="chatFab">
+    🤖<div class="fab-dot"></div>
+  </button>
+</div>
+
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script>
+  // Load full patient list on this page
+  document.addEventListener('DOMContentLoaded', () => {
+    loadRecentPatients();
+    loadPatientStats();
+  });
+
+  async function loadPatientStats() {
+    try {
+      const res = await fetch('/stats');
+      const data = await res.json();
+      const total = data.total_patients || 0;
+      const high  = data.high_risk || 0;
+      const mid   = data.medium_risk || 0;
+      const low   = total - high - mid;
+      animateCounter(document.getElementById('ptStatTotal'), total);
+      animateCounter(document.getElementById('ptStatHigh'),  high);
+      animateCounter(document.getElementById('ptStatMid'),   Math.max(mid,0));
+      animateCounter(document.getElementById('ptStatLow'),   Math.max(low,0));
+    } catch {
+      // fallback: count from DEMO_PATIENTS
+      const pts = typeof DEMO_PATIENTS !== 'undefined' ? DEMO_PATIENTS : [];
+      const h = pts.filter(p=>p.risk==='high').length;
+      const m = pts.filter(p=>p.risk==='mid').length;
+      animateCounter(document.getElementById('ptStatTotal'), pts.length);
+      animateCounter(document.getElementById('ptStatHigh'),  h);
+      animateCounter(document.getElementById('ptStatMid'),   m);
+      animateCounter(document.getElementById('ptStatLow'),   pts.length - h - m);
+    }
+  }
+</script>
+</body>
+</html>
