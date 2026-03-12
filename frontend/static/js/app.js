@@ -608,76 +608,63 @@ function initSearch() {
 
 let NOTIFICATIONS = [];
 let notifOpen     = false;
-let _lastNotifiedRiskScore = 0;
 
 async function loadNotifications() {
   const fresh = [];
   try {
     const pRes = await fetch('/api/patients', { headers: { 'Accept': 'application/json' } });
     if (pRes.ok) {
-      const arr = await pRes.json();
-      const patients = Array.isArray(arr) ? arr : (arr.patients || []);
-      patients.forEach(p => {
+      const arr  = await pRes.json();
+      const pts  = Array.isArray(arr) ? arr : (arr.patients || []);
+      pts.forEach(p => {
         const risk  = (p.risk || '').toLowerCase();
+        const score = p.risk_score ? (p.risk_score <= 1 ? Math.round(p.risk_score*100) : Math.round(p.risk_score)) : 0;
         const name  = p.name || 'Unknown';
         const diag  = p.last || p.last_diagnosis || p.condition || '';
         const pid   = p.id || '';
         const ts    = p.date || '';
-        const raw   = p.risk_score;
-        const score = raw ? (raw <= 1 ? Math.round(raw * 100) : Math.round(raw)) : 0;
         if (risk === 'high' || score >= 70) {
-          fresh.push({ id: 'p_' + pid, type: 'high', icon: '🔴',
-            title: 'High-Risk Patient',
-            body: `${name} — ${diag || 'Critical finding detected'}. Immediate review required.`,
-            time: ts ? _relTime(ts) : 'Recently', read: false, _ts: ts });
+          fresh.push({ id:'p_'+pid, type:'high', icon:'🔴', title:'High-Risk Patient',
+            body:`${name} — ${diag||'Critical finding detected'}. Immediate review required.`,
+            time: ts ? _relTime(ts) : 'Recently', read:false, _ts:ts });
         } else if (risk === 'mid' || risk === 'medium') {
-          fresh.push({ id: 'pm_' + pid, type: 'warn', icon: '🟠',
-            title: 'Moderate-Risk Patient',
-            body: `${name} — ${diag || 'Suspicious finding'}. Follow-up recommended.`,
-            time: ts ? _relTime(ts) : 'Recently', read: false, _ts: ts });
+          fresh.push({ id:'pm_'+pid, type:'warn', icon:'🟠', title:'Moderate-Risk Patient',
+            body:`${name} — ${diag||'Suspicious finding'}. Follow-up recommended.`,
+            time: ts ? _relTime(ts) : 'Recently', read:false, _ts:ts });
         }
       });
     }
-  } catch (e) { console.warn('loadNotifications patients:', e.message); }
-
+  } catch(e) { console.warn('loadNotifications:', e.message); }
   try {
     const st = await (await fetch('/stats')).json();
-    if (st.total_patients > 0) {
-      fresh.push({ id: 'stats_sum', type: st.high_risk > 0 ? 'warn' : 'ok',
-        icon: st.high_risk > 0 ? '📊' : '✅',
-        title: 'Patient Summary',
-        body: `${st.total_patients} patient${st.total_patients !== 1 ? 's' : ''} total. ${st.high_risk || 0} high-risk.`,
-        time: 'Live', read: true, _ts: '' });
-    }
-  } catch (e) { console.warn('loadNotifications stats:', e.message); }
-
-  fresh.sort((a, b) => {
-    if (!a.read && b.read) return -1;
-    if (a.read && !b.read)  return 1;
-    return new Date(b._ts || 0) - new Date(a._ts || 0);
-  });
-  const readSet = new Set(NOTIFICATIONS.filter(n => n.read).map(n => n.id));
-  fresh.forEach(n => { if (readSet.has(n.id)) n.read = true; });
-  const live = NOTIFICATIONS.filter(n => String(n.id).startsWith('live_'));
+    if (st.total_patients > 0) fresh.push({ id:'stats_sum', type: st.high_risk>0?'warn':'ok',
+      icon: st.high_risk>0?'📊':'✅', title:'Patient Summary',
+      body:`${st.total_patients} patient${st.total_patients!==1?'s':''} total · ${st.high_risk||0} high-risk.`,
+      time:'Live', read:true, _ts:'' });
+  } catch(e) {}
+  fresh.sort((a,b) => { if(!a.read&&b.read)return -1; if(a.read&&!b.read)return 1; return new Date(b._ts||0)-new Date(a._ts||0); });
+  const readSet = new Set(NOTIFICATIONS.filter(n=>n.read).map(n=>n.id));
+  fresh.forEach(n => { if(readSet.has(n.id)) n.read=true; });
+  const live = NOTIFICATIONS.filter(n=>String(n.id).startsWith('live_'));
   NOTIFICATIONS = [...live, ...fresh];
   _refreshNotifBadge();
 }
 
 function _relTime(ts) {
   try {
-    const sec = Math.floor((Date.now() - new Date(ts)) / 1000);
-    if (isNaN(sec) || sec < 0) return 'Recently';
-    if (sec < 60)    return 'Just now';
-    if (sec < 3600)  return Math.floor(sec / 60) + ' min ago';
-    if (sec < 86400) return Math.floor(sec / 3600) + ' hr ago';
-    return Math.floor(sec / 86400) + 'd ago';
+    const sec = Math.floor((Date.now()-new Date(ts))/1000);
+    if(isNaN(sec)||sec<0) return 'Recently';
+    if(sec<60)    return 'Just now';
+    if(sec<3600)  return Math.floor(sec/60)+' min ago';
+    if(sec<86400) return Math.floor(sec/3600)+' hr ago';
+    return Math.floor(sec/86400)+'d ago';
   } catch { return 'Recently'; }
 }
 
 function _refreshNotifBadge() {
   const bell = document.getElementById('notifBell');
   if (!bell) return;
-  const count = NOTIFICATIONS.filter(n => !n.read).length;
+  const count = NOTIFICATIONS.filter(n=>!n.read).length;
   let badge = bell.querySelector('.notif-count');
   if (count > 0) {
     if (!badge) {
@@ -695,9 +682,8 @@ function initNotifications() {
   const bell = document.getElementById('notifBell');
   if (!bell) return;
 
-  if (!document.getElementById('_notifStyle')) {
-    const s = document.createElement('style');
-    s.id = '_notifStyle';
+  if (!document.getElementById('_notifKf')) {
+    const s = document.createElement('style'); s.id='_notifKf';
     s.textContent = '@keyframes notifIn{from{opacity:0;transform:scale(.94) translateY(-8px)}to{opacity:1;transform:scale(1) translateY(0)}} @keyframes bellWiggle{0%,100%{transform:rotate(0)}20%{transform:rotate(-15deg)}40%{transform:rotate(15deg)}60%{transform:rotate(-10deg)}80%{transform:rotate(10deg)}}';
     document.head.appendChild(s);
   }
@@ -713,25 +699,25 @@ function initNotifications() {
   const typeColor = { high:'var(--c3)', warn:'var(--c4)', info:'var(--c1)', ok:'var(--c2)' };
 
   function renderPanel() {
-    const unread = NOTIFICATIONS.filter(n => !n.read).length;
+    const unread = NOTIFICATIONS.filter(n=>!n.read).length;
     panel.innerHTML = `
       <div style="padding:1rem 1.2rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
         <div>
           <div style="font-weight:700;font-size:1rem;color:var(--tx1)">Notifications</div>
-          <div style="font-size:.72rem;color:var(--tx3);font-family:'JetBrains Mono',monospace">${unread} unread · live from DB</div>
+          <div style="font-size:.72rem;color:var(--tx3);font-family:'JetBrains Mono',monospace">${unread} unread</div>
         </div>
         <div style="display:flex;gap:.5rem;align-items:center">
-          <button onclick="loadNotifications().then(()=>{if(notifOpen){const p=document.getElementById('notifPanel');if(p){p.remove();notifOpen=false;initNotifications();document.getElementById('notifBell')?.click();}}})" title="Refresh" style="font-size:.9rem;background:none;border:none;cursor:pointer;color:var(--tx3)" onmouseover="this.style.color='var(--c1)'" onmouseout="this.style.color='var(--tx3)'">↻</button>
-          <button onclick="markAllRead()" style="font-size:.73rem;color:var(--c1);background:none;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;white-space:nowrap">Mark all read</button>
+          <button onclick="loadNotifications().then(()=>{ if(notifOpen){ const p=document.getElementById('notifPanel'); if(p){p.remove();notifOpen=false;initNotifications();document.getElementById('notifBell')?.click();}}})" title="Refresh" style="font-size:1rem;background:none;border:none;cursor:pointer;color:var(--tx3)" onmouseover="this.style.color='var(--c1)'" onmouseout="this.style.color='var(--tx3)'">↻</button>
+          <button onclick="markAllRead()" style="font-size:.73rem;color:var(--c1);background:none;border:none;cursor:pointer;font-family:'DM Sans',sans-serif">Mark all read</button>
           <button onclick="closeNotifPanel()" style="width:26px;height:26px;border-radius:50%;background:var(--bg3);border:1px solid var(--border);display:grid;place-items:center;font-size:.8rem;color:var(--tx3);cursor:pointer">✕</button>
         </div>
       </div>
       <div style="overflow-y:auto;flex:1">
         ${NOTIFICATIONS.length === 0
-          ? '<div style="padding:2.5rem;text-align:center;color:var(--tx3)"><div style="font-size:2rem;margin-bottom:.5rem">🔔</div><div style="font-size:.82rem">No notifications yet</div><div style="font-size:.72rem;margin-top:.3rem;color:var(--tx4)">Add patients or run scans to see alerts</div></div>'
+          ? '<div style="padding:2.5rem;text-align:center;color:var(--tx3)"><div style="font-size:2rem;margin-bottom:.5rem">🔔</div><div style="font-size:.82rem">No notifications yet</div></div>'
           : NOTIFICATIONS.map(n => `
-            <div onclick="readNotif('${n.id}')" style="display:flex;gap:.75rem;padding:.85rem 1.2rem;border-bottom:1px solid var(--border);background:${n.read ? 'transparent' : 'rgba(0,212,255,.04)'};cursor:pointer;transition:background .15s;position:relative;" onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background='${n.read ? 'transparent' : 'rgba(0,212,255,.04)'}'">
-              ${!n.read ? `<div style="position:absolute;top:.9rem;left:.35rem;width:5px;height:5px;border-radius:50%;background:${typeColor[n.type]||'var(--c1)'}"></div>` : ''}
+            <div onclick="readNotif('${n.id}')" style="display:flex;gap:.75rem;padding:.85rem 1.2rem;border-bottom:1px solid var(--border);background:${n.read?'transparent':'rgba(0,212,255,.04)'};cursor:pointer;transition:background .15s;position:relative;" onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background='${n.read?'transparent':'rgba(0,212,255,.04)'}'">
+              ${!n.read?`<div style="position:absolute;top:.9rem;left:.35rem;width:5px;height:5px;border-radius:50%;background:${typeColor[n.type]||'var(--c1)'}"></div>`:''}
               <div style="font-size:1.2rem;flex-shrink:0;margin-top:.1rem">${n.icon}</div>
               <div style="flex:1;min-width:0">
                 <div style="font-size:.84rem;font-weight:${n.read?'500':'700'};color:${n.read?'var(--tx2)':'var(--tx1)'};margin-bottom:.15rem">${n.title}</div>
@@ -766,9 +752,8 @@ function closeNotifPanel() {
 }
 
 function readNotif(id) {
-  const n = NOTIFICATIONS.find(n => String(n.id) === String(id));
-  if (!n) return;
-  n.read = true;
+  const n = NOTIFICATIONS.find(n=>String(n.id)===String(id));
+  if (n) n.read = true;
   const panel = document.getElementById('notifPanel');
   if (panel && panel.style.display !== 'none') {
     notifOpen = false; initNotifications(); document.getElementById('notifBell')?.click();
@@ -778,26 +763,27 @@ function readNotif(id) {
 function markAllRead() {
   NOTIFICATIONS.forEach(n => { n.read = true; });
   _refreshNotifBadge();
-  const panel = document.getElementById('notifPanel');
-  if (panel) panel.remove();
+  const p = document.getElementById('notifPanel');
+  if (p) p.remove();
   notifOpen = false;
   initNotifications();
   document.getElementById('notifBell')?.click();
   showToast('✅ All notifications marked as read', 'ok');
 }
 
+let _lastNotifiedRiskScore = 0;
+
 function checkAndTriggerRiskNotification(riskScore, diagnosis, tier, predictedClass) {
   const score = typeof riskScore === 'number' ? riskScore : parseInt(riskScore) || 0;
   if (score < 70 || score <= _lastNotifiedRiskScore) { _lastNotifiedRiskScore = score; return; }
   _lastNotifiedRiskScore = score;
 
-  NOTIFICATIONS.unshift({ id: 'live_' + Date.now(), type: 'high', icon: '🚨',
-    title: `AI Alert — Risk ${score}%`,
-    body: `${tier||'CRITICAL'}: ${diagnosis||predictedClass||'Critical finding'}. Score ${score}% exceeds threshold.`,
-    time: 'Just now', read: false, _ts: new Date().toISOString() });
+  NOTIFICATIONS.unshift({ id:'live_'+Date.now(), type:'high', icon:'🚨',
+    title:`AI Alert — Risk ${score}%`,
+    body:`${tier||'CRITICAL'}: ${diagnosis||predictedClass||'Critical finding'}. Score ${score}%.`,
+    time:'Just now', read:false, _ts:new Date().toISOString() });
   _refreshNotifBadge();
   showToast(`🚨 HIGH RISK ${score}% — ${diagnosis||tier}`, 'err', 6000);
-  _showHighRiskBanner(score, diagnosis, predictedClass);
 
   const bell = document.getElementById('notifBell');
   if (bell) {
@@ -805,28 +791,30 @@ function checkAndTriggerRiskNotification(riskScore, diagnosis, tier, predictedCl
     requestAnimationFrame(() => { bell.style.animation = 'bellWiggle 0.6s ease'; });
     bell.style.boxShadow = '0 0 18px rgba(255,61,110,.8)';
     bell.style.color = '#ff3d6e';
-    setTimeout(() => { bell.style.boxShadow = ''; bell.style.color = ''; }, 2800);
+    setTimeout(() => { bell.style.boxShadow=''; bell.style.color=''; }, 2800);
   }
+  _showHighRiskBanner(score, diagnosis, predictedClass);
   setTimeout(() => {
     const p = document.getElementById('notifPanel');
     if (p) p.remove();
-    notifOpen = false; initNotifications(); document.getElementById('notifBell')?.click();
+    notifOpen=false; initNotifications(); document.getElementById('notifBell')?.click();
   }, 900);
 }
 
 function _showHighRiskBanner(score, diagnosis, predictedClass) {
   document.getElementById('_hrBanner')?.remove();
   if (!document.getElementById('_hrBannerKf')) {
-    const s = document.createElement('style'); s.id = '_hrBannerKf';
-    s.textContent = '@keyframes slideDown{from{transform:translateY(-100%)}to{transform:translateY(0)}}';
+    const s=document.createElement('style'); s.id='_hrBannerKf';
+    s.textContent='@keyframes slideDown{from{transform:translateY(-100%)}to{transform:translateY(0)}}';
     document.head.appendChild(s);
   }
-  const b = document.createElement('div'); b.id = '_hrBanner';
-  b.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:9999;background:linear-gradient(90deg,#ff3d6e,#ff6b35);color:#fff;padding:.65rem 1.5rem;display:flex;align-items:center;justify-content:space-between;font-family:'DM Sans',sans-serif;font-size:.88rem;font-weight:600;box-shadow:0 4px 24px rgba(255,61,110,.5);animation:slideDown .35s cubic-bezier(.34,1.56,.64,1)";
-  b.innerHTML = `<div style="display:flex;align-items:center;gap:.75rem"><span style="font-size:1.2rem">🚨</span><span>HIGH RISK ALERT — ${score}% · ${diagnosis||predictedClass||'Critical finding'}. Immediate clinical review required.</span></div><button onclick="document.getElementById('_hrBanner').remove()" style="background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.4);color:#fff;border-radius:6px;padding:3px 10px;cursor:pointer;font-size:.82rem">Dismiss ✕</button>`;
+  const b = document.createElement('div'); b.id='_hrBanner';
+  b.style.cssText="position:fixed;top:0;left:0;right:0;z-index:9999;background:linear-gradient(90deg,#ff3d6e,#ff6b35);color:#fff;padding:.65rem 1.5rem;display:flex;align-items:center;justify-content:space-between;font-family:'DM Sans',sans-serif;font-size:.88rem;font-weight:600;box-shadow:0 4px 24px rgba(255,61,110,.5);animation:slideDown .35s cubic-bezier(.34,1.56,.64,1)";
+  b.innerHTML=`<div style="display:flex;align-items:center;gap:.75rem"><span style="font-size:1.2rem">🚨</span><span>HIGH RISK — ${score}% · ${diagnosis||predictedClass||'Critical'}. Immediate review required.</span></div><button onclick="document.getElementById('_hrBanner').remove()" style="background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.4);color:#fff;border-radius:6px;padding:3px 10px;cursor:pointer;font-size:.82rem">Dismiss ✕</button>`;
   document.body.prepend(b);
-  setTimeout(() => { if (b.parentNode) { b.style.transition='opacity .5s'; b.style.opacity='0'; setTimeout(()=>b.remove(),500); } }, 12000);
+  setTimeout(()=>{ if(b.parentNode){b.style.transition='opacity .5s';b.style.opacity='0';setTimeout(()=>b.remove(),500);} }, 12000);
 }
+
 
 
 
@@ -953,54 +941,38 @@ async function runScan() {
     const diagnosis      = d.diagnosis || d.predicted_class || 'Unknown';
     const recommendation = d.recommendation || d.details || '';
     const predictedClass = d.predicted_class || '';
+    const rawProbs       = d.probabilities || {};
 
-    // Risk score: use backend value, but override if fusion model gave garbage (< 5% for TUM/STR)
+    // Risk score — recalculate from TUM+STR probs if fusion gave implausible low value
     let riskScore = typeof d.risk_score === 'number' ? Math.round(d.risk_score) : 50;
-    const probs_raw = d.probabilities || {};
-    const tumProb   = (probs_raw['TUM'] || 0);
-    const strProb   = (probs_raw['STR'] || 0);
-
-    // If base model says TUM/STR but fusion risk_score is implausibly low, recalculate
+    const tumP = rawProbs['TUM'] || 0;
+    const strP = rawProbs['STR'] || 0;
     if ((predictedClass === 'TUM' || predictedClass === 'STR') && riskScore < 40) {
-      // Derive from softmax probabilities directly (more reliable than fusion score)
-      riskScore = Math.round(Math.min((tumProb + strProb) * 100 + (d.probability || d.prob || 0) * 60, 99));
-      if (riskScore < 50) riskScore = predictedClass === 'TUM' ? 82 : 65; // floor for definitive malignant classes
+      riskScore = Math.min(Math.round((tumP + strP) * 100 * 1.4), 99);
+      if (riskScore < 50) riskScore = predictedClass === 'TUM' ? 82 : 65;
     }
 
-    // Tier: derive from predictedClass — more reliable than fusion model tier when weights are missing
-    let tier = d.tier || '';
-    const classTierMap = { TUM: 'CRITICAL', STR: 'SUSPICIOUS', LYM: 'SUSPICIOUS', DEB: 'WATCH',
-                           MUC: 'NEGATIVE', MUS: 'NEGATIVE', NORM: 'NEGATIVE', ADI: 'NEGATIVE' };
-    if (!tier || tier === 'UNKNOWN' || tier === 'DEMO') {
-      tier = classTierMap[predictedClass] || (riskScore >= 70 ? 'CRITICAL' : riskScore >= 40 ? 'SUSPICIOUS' : 'NEGATIVE');
-    }
+    // Tier — always derive from predicted class (more reliable than fusion tier)
+    const CLASS_TIER = { TUM:'CRITICAL', STR:'SUSPICIOUS', LYM:'SUSPICIOUS', DEB:'WATCH',
+                         MUC:'NEGATIVE', MUS:'NEGATIVE', NORM:'NEGATIVE', ADI:'NEGATIVE' };
+    let tier = predictedClass ? (CLASS_TIER[predictedClass] || d.tier || 'NEGATIVE')
+                               : (d.tier || (riskScore >= 70 ? 'CRITICAL' : riskScore >= 40 ? 'SUSPICIOUS' : 'NEGATIVE'));
 
     // Map backend 8-class probabilities to frontend display
     // CLASSES: ['ADI','DEB','LYM','MUC','MUS','NORM','STR','TUM']
     let probs = null;
-    if (d.probabilities && typeof d.probabilities === 'object') {
-      const classMap = d.probabilities;
-      probs = {
-        raw: classMap,
-        display: [
-          Math.round((classMap['TUM']  || 0) * 100),
-          Math.round((classMap['STR']  || 0) * 100),
-          Math.round((classMap['LYM']  || 0) * 100),
-          Math.round((classMap['DEB']  || 0) * 100),
-          Math.round((classMap['MUC']  || 0) * 100),
-          Math.round((classMap['MUS']  || 0) * 100),
-          Math.round((classMap['NORM'] || 0) * 100),
-          Math.round((classMap['ADI']  || 0) * 100),
-        ]
-      };
+    if (rawProbs && typeof rawProbs === 'object' && Object.keys(rawProbs).length > 0) {
+      probs = { raw: rawProbs };   // let updateProbBars handle all 8 classes
     }
 
     // Store globals for SHAP chart + PDF download
     window._lastPredictedClass = predictedClass;
-    window._lastRawProbs       = d.probabilities || {};
+    window._lastRawProbs       = rawProbs;
     window._lastConfidence     = d.confidence    ? Math.round(d.confidence * 100) : '';
     window._gradcamPath        = d.gradcam_url   || d.gradcam_path || null;
-    window._shapData           = (d.shap_values && Object.keys(d.shap_values).length > 0) ? d.shap_values : null;
+    // shap_values: per-class dict from backend (real or softmax-derived)
+    window._shapData           = (d.shap_values && Object.keys(d.shap_values).length > 0)
+                                   ? d.shap_values : null;
 
     displayResults(diagnosis, recommendation, riskScore, probs, tier, predictedClass);
 
@@ -1095,15 +1067,10 @@ function displayResults(diagnosis, recommendation, riskScore, probs, tier, predi
   // ── Probability bars ──
   if (probs) {
     if (probs.raw && typeof probs.raw === 'object' && Object.keys(probs.raw).length > 0) {
-      // Real backend data — show all 8 classes
-      updateProbBars(null, probs.raw);
+      updateProbBars(null, probs.raw);   // 8-class from real backend data
     } else {
       const probArr = probs.display || probs;
-      if (Array.isArray(probArr)) {
-        updateProbBars(probArr, null);
-      } else {
-        updateProbBars(Object.values(probs), null);
-      }
+      updateProbBars(Array.isArray(probArr) ? probArr : Object.values(probs), null);
     }
   }
 
@@ -1173,9 +1140,16 @@ function updateProbBars(probs, rawProbs) {
       { key:'ADI',  label:'Adipose (Fat Tissue)',        color:'#a8ff78',    risk:'NEGATIVE'   },
     ];
 
+    // Detect int (0-100) vs float (0-1) format
+    const sampleVal = Object.values(rawProbs)[0] || 0;
+    const isFloat   = sampleVal < 1.01;
+
     // Sort by probability descending
     const sorted = BACKEND_CLASSES
-      .map(c => ({ ...c, pct: Math.round((rawProbs[c.key] || 0) * 100) }))
+      .map(c => {
+        const v = rawProbs[c.key] || 0;
+        return { ...c, pct: isFloat ? Math.round(v * 100) : Math.round(v) };
+      })
       .sort((a, b) => b.pct - a.pct);
 
     container.innerHTML = sorted.map((c, i) => `
@@ -1296,7 +1270,8 @@ function renderHeatmapContent(tab) {
     `;
 
     if (src) {
-      setTimeout(() => drawGradCAMOnCanvas(src), 80);
+      // src = original uploaded image for B&W base; overlay loaded separately via _gradcamPath
+      setTimeout(() => drawGradCAMOnCanvas(src, window._gradcamPath), 80);
     }
 
   } else {
@@ -1309,7 +1284,7 @@ function renderHeatmapContent(tab) {
 }
 
 // ── GradCAM: convert uploaded image to greyscale on canvas, then draw thermal overlay ──
-function drawGradCAMOnCanvas(imageSrc) {
+function drawGradCAMOnCanvas(imageSrc, gradcamOverlayPath) {
   const bwCanvas     = document.getElementById('bwCanvas');
   const heatCanvas   = document.getElementById('heatmapCanvas');
   const loadingState = document.getElementById('gradcamLoadingState');
@@ -1354,7 +1329,9 @@ function drawGradCAMOnCanvas(imageSrc) {
       if (loadingState) loadingState.style.opacity = '0';
       setTimeout(() => { if (loadingState) loadingState.style.display = 'none'; }, 300);
     };
-    serverGradcam.src = `/static/uploads/gradcam.png?t=${Date.now()}`;
+    // Use exact filename returned by backend (UUID-named), not generic gradcam.png
+    const gcSrc = window._gradcamPath || `/static/uploads/gradcam.png`;
+    serverGradcam.src = gcSrc + (gcSrc.includes('?') ? '&' : '?') + 't=' + Date.now();
   };
   img.onerror = () => {
     if (loadingState) { loadingState.querySelector('div div:last-child').textContent = 'Image unavailable'; }
@@ -1404,23 +1381,16 @@ function renderSHAPChart(shapData) {
   if (shapData) {
     vals = shapData;
   } else {
-    // Derive SHAP approximation from real softmax probabilities if available
-    const rawProbs  = window._lastRawProbs || {};
-    const lastClass = window._lastPredictedClass || '';
-    const hasProbs  = Object.keys(rawProbs).length > 0;
-
+    // Derive from real softmax probabilities stored after last scan
+    const rawP = window._lastRawProbs || {};
+    const hasProbs = Object.keys(rawP).length > 0;
+    const baseline = 1 / 8;  // uniform prior for 8 classes
     CLASSES.forEach(c => {
       if (hasProbs) {
-        const p = rawProbs[c.key] || 0;
-        // SHAP sign: positive = pushes toward class (high prob classes), negative = away
-        // Scale: high-prob classes get high positive values, low-prob get small negative
-        const baseline = 1 / 8; // uniform baseline (0.125)
-        vals[c.key] = parseFloat(((p - baseline) * 1.2).toFixed(3));
+        // Signed SHAP approx: positive = pushes toward class, negative = away
+        vals[c.key] = parseFloat(((rawP[c.key] || 0) - baseline).toFixed(4));
       } else {
-        // True fallback: use lastClass only
-        if (c.key === lastClass) vals[c.key] = 0.80;
-        else if (c.pos) vals[c.key] = 0.06;
-        else vals[c.key] = -0.04;
+        vals[c.key] = c.key === (window._lastPredictedClass || '') ? 0.75 : c.pos ? 0.05 : -0.04;
       }
     });
   }

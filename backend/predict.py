@@ -29,32 +29,31 @@ def run_prediction(image_tensor, age, gender, stage, gene_score, genomic_risk):
     genomic = genomic_to_tensor([gene_score, genomic_risk]).to(device)
 
     with torch.no_grad():
-        img_features = feature_extractor(image_tensor)
-        img_features = img_features.view(img_features.size(0), -1)
-
-        # Base model (ResNet50) — always has trained weights, use as authoritative classifier
+        # ── Base ResNet50 (always has trained weights) ──────────────────
         base_logits = model(image_tensor)
         base_probs  = F.softmax(base_logits, dim=1)
         base_pred   = int(torch.argmax(base_probs, dim=1).item())
         base_conf   = float(base_probs[0, base_pred].item())
 
-        # Fusion model — only use if it has trained weights (confidence > random baseline 1/8)
-        fusion_logits = fusion_model(img_features, clinical, genomic)
-        fusion_probs  = F.softmax(fusion_logits, dim=1)
-        fusion_pred   = int(torch.argmax(fusion_probs, dim=1).item())
-        fusion_conf   = float(fusion_probs[0, fusion_pred].item())
+        # ── Fusion model (only reliable if gastric_fusion.pth was trained) ──
+        img_features   = feature_extractor(image_tensor)
+        img_features   = img_features.view(img_features.size(0), -1)
+        fusion_logits  = fusion_model(img_features, clinical, genomic)
+        fusion_probs   = F.softmax(fusion_logits, dim=1)
+        fusion_pred    = int(torch.argmax(fusion_probs, dim=1).item())
+        fusion_conf    = float(fusion_probs[0, fusion_pred].item())
 
-        # If fusion model looks trained (max prob well above random 0.125), use it
-        # Otherwise fall back to base ResNet50 (which IS trained)
-        FUSION_TRAINED_THRESHOLD = 0.30
-        if fusion_conf >= FUSION_TRAINED_THRESHOLD:
-            pred_idx        = fusion_pred
+        # Use fusion only if its top confidence is well above random baseline (1/8 = 0.125)
+        FUSION_THRESHOLD = 0.30
+        if fusion_conf >= FUSION_THRESHOLD:
+            pred_idx       = fusion_pred
             pred_confidence = fusion_conf
-            use_probs       = fusion_probs
+            use_probs      = fusion_probs
         else:
-            pred_idx        = base_pred
+            # Fusion has untrained weights — use base ResNet50
+            pred_idx       = base_pred
             pred_confidence = base_conf
-            use_probs       = base_probs
+            use_probs      = base_probs
 
     label = LABEL_MAP[pred_idx]
 
@@ -84,5 +83,5 @@ def run_prediction(image_tensor, age, gender, stage, gene_score, genomic_risk):
         "tier": report["tier"],
         "recommendation": report["recommendation"],
         "details": report["details"],
-        "confidence": round(pred_confidence, 4),
+        "confidence": pred_confidence,
     }

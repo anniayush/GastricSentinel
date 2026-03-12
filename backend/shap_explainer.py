@@ -98,3 +98,46 @@ def get_shap_values_per_class(model, image_path, label_map, clinical=None, genom
     result = {k: round(v / total, 4) for k, v in result.items()}
 
     return result
+
+
+def get_class_shap_scores(image_path, label_map):
+    """
+    Returns per-class SHAP attribution scores as a normalised dict.
+    Uses base ResNet50 (has trained weights).
+    Falls back to softmax-deviation approximation if SHAP library is unavailable.
+    """
+    from utils import preprocess_image as _preprocess
+    import torch, torch.nn.functional as F
+    from model_loader import load_model
+
+    # Always use base ResNet50 — it has trained weights and layer4 for SHAP
+    cnn_model = load_model()
+    cnn_model.eval()
+
+    img_tensor = _preprocess(image_path)
+
+    # Try real SHAP first (DeepExplainer)
+    if shap is not None:
+        try:
+            background = torch.zeros_like(img_tensor)
+
+            def _forward(x):
+                return cnn_model(x)
+
+            explainer   = shap.DeepExplainer(_forward, background)
+            shap_vals   = explainer.shap_values(img_tensor)  # list of [1,C,H,W] per class
+            result = {}
+            for i, cls in enumerate(label_map):
+                class_map = shap_vals[i][0]                    # shape [C,H,W]
+                result[cls] = float(np.mean(np.abs(class_map)))
+            total = sum(result.values()) + 1e-8
+            return {k: round(v / total, 4) for k, v in result.items()}
+        except Exception as e:
+            print(f"[SHAP] DeepExplainer failed ({e}), using softmax approximation")
+
+    # Fallback: derive from softmax probabilities (signed deviation from uniform baseline)
+    with torch.no_grad():
+        logits = cnn_model(img_tensor)
+        probs  = F.softmax(logits, dim=1)[0]
+    baseline = 1.0 / len(label_map)
+    return {cls: round(float((probs[i] - baseline) * 1.2), 4) for i, cls in enumerate(label_map)}

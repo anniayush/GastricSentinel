@@ -7,7 +7,7 @@ from flask import Flask, request, jsonify, render_template, send_file
 from database import get_db
 from predict import run_prediction, fusion_model as prediction_model
 from gradcam import generate_gradcam
-from shap_explainer import generate_shap
+from shap_explainer import generate_shap, get_class_shap_scores
 from utils import preprocess_image, clinical_to_tensor, genomic_to_tensor
 from datetime import datetime
 try:
@@ -134,10 +134,10 @@ def delete_patient(pid):
 @app.route("/update_patient", methods=["POST"])
 def update_patient():
     data = request.json or {}
-    pid = data.get("id")
+    pid  = data.get("id")
     if not pid:
         return jsonify({"error": "Missing id"}), 400
-    fields = {k: data[k] for k in ["name", "age", "gender", "condition", "risk"] if k in data}
+    fields = {k: data[k] for k in ["name","age","gender","condition","risk"] if k in data}
     try:
         db.patients.update_one({"_id": ObjectId(pid)}, {"$set": fields})
     except Exception:
@@ -164,33 +164,45 @@ def predict():
 
     prediction = run_prediction(img_tensor, age, gender, stage, gene_score, genomic_risk)
 
-    gradcam_path = generate_gradcam(prediction_model, str(path), clinical_t, genomic_t)
-    shap_path = generate_shap(prediction_model, str(path), clinical_t, genomic_t)
+    # GradCAM: always use base ResNet50 (has trained weights + layer4)
+    from model_loader import load_model as _load_base
+    _base_model = _load_base()
+    gradcam_path = generate_gradcam(_base_model, str(path), clinical_t, genomic_t)
+
+    # SHAP image overlay (if cv2+shap installed) — for optional future display
+    shap_path = generate_shap(_base_model, str(path), clinical_t, genomic_t)
+
+    # Per-class SHAP scores for the bar chart in the frontend
+    from utils import CLASSES as _CLASSES
+    shap_scores = get_class_shap_scores(str(path), _CLASSES)
 
     scan = {
-        "prediction": prediction["label"],
-        "diagnosis": prediction["diagnosis"],
-        "probability": prediction["prob"],
-        "risk": prediction["risk"],
-        "risk_score": prediction["risk_score"],
-        "tier": prediction["tier"],
-        "timestamp": datetime.utcnow()
+        "prediction":      prediction["label"],
+        "predicted_class": prediction["predicted_class"],
+        "diagnosis":       prediction["diagnosis"],
+        "probability":     prediction["prob"],
+        "risk":            prediction["risk"],
+        "risk_score":      prediction["risk_score"],
+        "tier":            prediction["tier"],
+        "probabilities":   prediction["probabilities"],
+        "timestamp":       datetime.utcnow(),
     }
     db.scans.insert_one(scan)
 
     return jsonify({
-        "diagnosis": prediction["diagnosis"],
-        "probability": prediction["prob"],
-        "risk": prediction["risk"],
-        "risk_score": prediction["risk_score"],
-        "tier": prediction["tier"],
-        "recommendation": prediction["recommendation"],
-        "details": prediction["details"],
-        "confidence": prediction["confidence"],
+        "diagnosis":       prediction["diagnosis"],
+        "probability":     prediction["prob"],
+        "risk":            prediction["risk"],
+        "risk_score":      prediction["risk_score"],
+        "tier":            prediction["tier"],
+        "recommendation":  prediction["recommendation"],
+        "details":         prediction["details"],
+        "confidence":      prediction["confidence"],
         "predicted_class": prediction["predicted_class"],
-        "probabilities": prediction["probabilities"],
-        "gradcam_url": gradcam_path,
-        "shap_url": shap_path,
+        "probabilities":   prediction["probabilities"],
+        "gradcam_url":     gradcam_path,
+        "shap_url":        shap_path,
+        "shap_values":     shap_scores,    # per-class dict for frontend bar chart
     })
 
 
@@ -420,60 +432,44 @@ def scan_activity():
 def risk_alerts():
     alerts = []
     for p in db.patients.find():
-        risk = p.get("risk", "low")
+        risk  = p.get("risk", "low")
         if risk == "medium": risk = "mid"
         score = p.get("risk_score", 0)
-        if isinstance(score, float) and score <= 1:
-            score = int(score * 100)
-        else:
-            score = int(score) if score else 0
-        if risk == "high" or score >= 80:
-            status, default_score, action = "critical", 85, "Immediate oncology referral"
-        elif risk == "mid" or score >= 45:
-            status, default_score, action = "urgent", 55, "Endoscopic follow-up consult"
-        else:
-            status, default_score, action = "watch", 25, "H. pylori test + follow-up"
-        if score == 0:
-            score = default_score
+        if isinstance(score, float) and score <= 1: score = int(score * 100)
+        else: score = int(score) if score else 0
+        if risk == "high" or score >= 80: status, ds, action = "critical", 85, "Immediate oncology referral"
+        elif risk == "mid" or score >= 45: status, ds, action = "urgent",   55, "Endoscopic follow-up"
+        else:                              status, ds, action = "watch",    25, "H. pylori test + follow-up"
+        if score == 0: score = ds
         dx    = p.get("condition", p.get("last_diagnosis", "Unknown"))
         ts    = p.get("created_at", p.get("updated_at", ""))
-        since = str(ts)[:10] if ts else "Recently"
-        alerts.append({
-            "id":      str(p["_id"]),
-            "patient": p.get("name", "Unknown"),
-            "pid":     "P-" + str(p["_id"])[-4:].upper(),
-            "age":     p.get("age", "—"),
-            "dx":      dx,
-            "score":   score,
-            "status":  status,
-            "action":  action,
-            "since":   since,
-        })
-    order = {"critical": 0, "urgent": 1, "watch": 2}
-    alerts.sort(key=lambda a: order.get(a["status"], 3))
+        alerts.append({"id": str(p["_id"]), "patient": p.get("name","Unknown"),
+            "pid": "P-"+str(p["_id"])[-4:].upper(), "age": p.get("age","—"),
+            "dx": dx, "score": score, "status": status, "action": action,
+            "since": str(ts)[:10] if ts else "Recently"})
+    alerts.sort(key=lambda a: {"critical":0,"urgent":1,"watch":2}.get(a["status"],3))
     return jsonify(alerts)
 
 
 @app.route("/shap_explain", methods=["POST"])
 def shap_explain():
+    """Returns per-class SHAP attribution scores for the most recent scan."""
     latest = list(db.scans.find().sort("_id", -1).limit(1))
     if not latest:
         return jsonify({"shap_values": {}})
-
     scan = latest[0]
-    probabilities = scan.get("probabilities", {})
-    predicted = str(scan.get("prediction", scan.get("predicted_class", ""))).upper()
-
-    # If we have real softmax probabilities, derive SHAP as deviation from uniform baseline
-    if probabilities:
-        baseline = 1.0 / 8  # uniform prior for 8 classes
-        shap_values = {
-            cls: round((float(prob) - baseline) * 1.2, 4)
-            for cls, prob in probabilities.items()
-        }
-        return jsonify({"shap_values": shap_values, "predicted": predicted})
-
-    # Fallback: no probabilities stored — return empty so frontend uses its own calculation
+    # If probabilities were stored, derive SHAP as softmax deviation (fast fallback)
+    probs = scan.get("probabilities", {})
+    if probs:
+        baseline = 1.0 / 8
+        shap_vals = {cls: round((float(p) - baseline) * 1.2, 4) for cls, p in probs.items()}
+        return jsonify({"shap_values": shap_vals, "predicted": scan.get("predicted_class","")})
+    # No stored probs — try re-running SHAP on last image
+    img_path = scan.get("image_path", "")
+    if img_path and os.path.exists(img_path):
+        from utils import CLASSES as _CLS
+        scores = get_class_shap_scores(img_path, _CLS)
+        return jsonify({"shap_values": scores})
     return jsonify({"shap_values": {}})
 
 
