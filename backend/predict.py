@@ -32,16 +32,34 @@ def run_prediction(image_tensor, age, gender, stage, gene_score, genomic_risk):
         img_features = feature_extractor(image_tensor)
         img_features = img_features.view(img_features.size(0), -1)
 
-        fusion_logits = fusion_model(img_features, clinical, genomic)
-        fusion_probs = F.softmax(fusion_logits, dim=1)
+        # Base model (ResNet50) — always has trained weights, use as authoritative classifier
+        base_logits = model(image_tensor)
+        base_probs  = F.softmax(base_logits, dim=1)
+        base_pred   = int(torch.argmax(base_probs, dim=1).item())
+        base_conf   = float(base_probs[0, base_pred].item())
 
-        pred_idx = int(torch.argmax(fusion_probs, dim=1).item())
-        pred_confidence = float(fusion_probs[0, pred_idx].item())
+        # Fusion model — only use if it has trained weights (confidence > random baseline 1/8)
+        fusion_logits = fusion_model(img_features, clinical, genomic)
+        fusion_probs  = F.softmax(fusion_logits, dim=1)
+        fusion_pred   = int(torch.argmax(fusion_probs, dim=1).item())
+        fusion_conf   = float(fusion_probs[0, fusion_pred].item())
+
+        # If fusion model looks trained (max prob well above random 0.125), use it
+        # Otherwise fall back to base ResNet50 (which IS trained)
+        FUSION_TRAINED_THRESHOLD = 0.30
+        if fusion_conf >= FUSION_TRAINED_THRESHOLD:
+            pred_idx        = fusion_pred
+            pred_confidence = fusion_conf
+            use_probs       = fusion_probs
+        else:
+            pred_idx        = base_pred
+            pred_confidence = base_conf
+            use_probs       = base_probs
 
     label = LABEL_MAP[pred_idx]
 
-    tum_prob = float(fusion_probs[0, TUM_IDX].item())
-    str_prob = float(fusion_probs[0, STR_IDX].item())
+    tum_prob = float(use_probs[0, TUM_IDX].item())
+    str_prob = float(use_probs[0, STR_IDX].item())
     cancer_risk_score = tum_prob + str_prob
 
     if cancer_risk_score >= 0.45:
@@ -51,7 +69,7 @@ def run_prediction(image_tensor, age, gender, stage, gene_score, genomic_risk):
     else:
         risk = "low"
 
-    probabilities = {LABEL_MAP[i]: float(fusion_probs[0, i].item()) for i in range(len(LABEL_MAP))}
+    probabilities = {LABEL_MAP[i]: float(use_probs[0, i].item()) for i in range(len(LABEL_MAP))}
 
     report = generate_report(pred_idx, pred_confidence)
 
@@ -66,5 +84,5 @@ def run_prediction(image_tensor, age, gender, stage, gene_score, genomic_risk):
         "tier": report["tier"],
         "recommendation": report["recommendation"],
         "details": report["details"],
-        "confidence": pred_confidence,
+        "confidence": round(pred_confidence, 4),
     }

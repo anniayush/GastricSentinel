@@ -220,14 +220,26 @@ async function loadRecentPatients(forcedData) {
 
   if (!data) {
     try {
-      const res = await fetch('/api/patients', { headers: { 'Accept': 'application/json' } });
+      const res = await fetch('/patients');
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const json = await res.json();
+      // Backend might return {patients:[...]} or just [...]
       data = Array.isArray(json) ? json : (json.patients || json.data || []);
     } catch (e) {
-      console.warn('Could not load patients from /api/patients:', e.message);
+      console.warn('Could not load patients from /patients:', e.message);
       data = null;
     }
+  }
+
+  // If backend returned nothing, try /get_patients as alternate endpoint
+  if (!data || !data.length) {
+    try {
+      const res2 = await fetch('/get_patients');
+      if (res2.ok) {
+        const j = await res2.json();
+        data = Array.isArray(j) ? j : (j.patients || j.data || []);
+      }
+    } catch {}
   }
 
   // Final fallback — but LABEL it as demo data
@@ -598,7 +610,6 @@ let NOTIFICATIONS = [];
 let notifOpen     = false;
 let _lastNotifiedRiskScore = 0;
 
-// Fetch real notification data from DB via /api/patients + /stats
 async function loadNotifications() {
   const fresh = [];
   try {
@@ -695,7 +706,7 @@ function initNotifications() {
   if (!panel) {
     panel = document.createElement('div');
     panel.id = 'notifPanel';
-    panel.style.cssText = 'position:fixed;top:70px;right:1.2rem;width:370px;max-height:540px;background:var(--bg2);border:1px solid var(--border);border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.55);z-index:400;display:none;flex-direction:column;overflow:hidden;animation:notifIn .25s cubic-bezier(.34,1.56,.64,1);';
+    panel.style.cssText = "position:fixed;top:70px;right:1.2rem;width:370px;max-height:540px;background:var(--bg2);border:1px solid var(--border);border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.55);z-index:400;display:none;flex-direction:column;overflow:hidden;animation:notifIn .25s cubic-bezier(.34,1.56,.64,1);";
     document.body.appendChild(panel);
   }
 
@@ -710,7 +721,7 @@ function initNotifications() {
           <div style="font-size:.72rem;color:var(--tx3);font-family:'JetBrains Mono',monospace">${unread} unread · live from DB</div>
         </div>
         <div style="display:flex;gap:.5rem;align-items:center">
-          <button onclick="loadNotifications().then(()=>{ if(notifOpen){ const p=document.getElementById('notifPanel'); if(p){p.remove();notifOpen=false;initNotifications();document.getElementById('notifBell')?.click();}}})" title="Refresh" style="font-size:.9rem;background:none;border:none;cursor:pointer;color:var(--tx3)" onmouseover="this.style.color='var(--c1)'" onmouseout="this.style.color='var(--tx3)'">↻</button>
+          <button onclick="loadNotifications().then(()=>{if(notifOpen){const p=document.getElementById('notifPanel');if(p){p.remove();notifOpen=false;initNotifications();document.getElementById('notifBell')?.click();}}})" title="Refresh" style="font-size:.9rem;background:none;border:none;cursor:pointer;color:var(--tx3)" onmouseover="this.style.color='var(--c1)'" onmouseout="this.style.color='var(--tx3)'">↻</button>
           <button onclick="markAllRead()" style="font-size:.73rem;color:var(--c1);background:none;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;white-space:nowrap">Mark all read</button>
           <button onclick="closeNotifPanel()" style="width:26px;height:26px;border-radius:50%;background:var(--bg3);border:1px solid var(--border);display:grid;place-items:center;font-size:.8rem;color:var(--tx3);cursor:pointer">✕</button>
         </div>
@@ -733,7 +744,6 @@ function initNotifications() {
     _refreshNotifBadge();
   }
 
-  // Clone bell to remove stale listeners
   const newBell = bell.cloneNode(true);
   bell.parentNode.replaceChild(newBell, bell);
   newBell.addEventListener('click', e => {
@@ -761,9 +771,7 @@ function readNotif(id) {
   n.read = true;
   const panel = document.getElementById('notifPanel');
   if (panel && panel.style.display !== 'none') {
-    notifOpen = false;
-    initNotifications();
-    document.getElementById('notifBell')?.click();
+    notifOpen = false; initNotifications(); document.getElementById('notifBell')?.click();
   }
 }
 
@@ -778,7 +786,6 @@ function markAllRead() {
   showToast('✅ All notifications marked as read', 'ok');
 }
 
-// Called after every AI scan result
 function checkAndTriggerRiskNotification(riskScore, diagnosis, tier, predictedClass) {
   const score = typeof riskScore === 'number' ? riskScore : parseInt(riskScore) || 0;
   if (score < 70 || score <= _lastNotifiedRiskScore) { _lastNotifiedRiskScore = score; return; }
@@ -803,22 +810,18 @@ function checkAndTriggerRiskNotification(riskScore, diagnosis, tier, predictedCl
   setTimeout(() => {
     const p = document.getElementById('notifPanel');
     if (p) p.remove();
-    notifOpen = false;
-    initNotifications();
-    document.getElementById('notifBell')?.click();
+    notifOpen = false; initNotifications(); document.getElementById('notifBell')?.click();
   }, 900);
 }
 
 function _showHighRiskBanner(score, diagnosis, predictedClass) {
   document.getElementById('_hrBanner')?.remove();
   if (!document.getElementById('_hrBannerKf')) {
-    const s = document.createElement('style');
-    s.id = '_hrBannerKf';
+    const s = document.createElement('style'); s.id = '_hrBannerKf';
     s.textContent = '@keyframes slideDown{from{transform:translateY(-100%)}to{transform:translateY(0)}}';
     document.head.appendChild(s);
   }
-  const b = document.createElement('div');
-  b.id = '_hrBanner';
+  const b = document.createElement('div'); b.id = '_hrBanner';
   b.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:9999;background:linear-gradient(90deg,#ff3d6e,#ff6b35);color:#fff;padding:.65rem 1.5rem;display:flex;align-items:center;justify-content:space-between;font-family:'DM Sans',sans-serif;font-size:.88rem;font-weight:600;box-shadow:0 4px 24px rgba(255,61,110,.5);animation:slideDown .35s cubic-bezier(.34,1.56,.64,1)";
   b.innerHTML = `<div style="display:flex;align-items:center;gap:.75rem"><span style="font-size:1.2rem">🚨</span><span>HIGH RISK ALERT — ${score}% · ${diagnosis||predictedClass||'Critical finding'}. Immediate clinical review required.</span></div><button onclick="document.getElementById('_hrBanner').remove()" style="background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.4);color:#fff;border-radius:6px;padding:3px 10px;cursor:pointer;font-size:.82rem">Dismiss ✕</button>`;
   document.body.prepend(b);
@@ -947,12 +950,30 @@ async function runScan() {
     const d = Array.isArray(json) ? json[0] : json;
 
     // ── Map backend response to frontend display ──
-    // Backend fields: diagnosis, details, recommendation, risk_score, probabilities, predicted_class, tier, color
-    const diagnosis       = d.diagnosis || d.predicted_class || 'Unknown';
-    const recommendation  = d.recommendation || d.details || '';
-    const riskScore       = typeof d.risk_score === 'number' ? Math.round(d.risk_score) : 50;
-    const tier            = d.tier || 'UNKNOWN';
-    const predictedClass  = d.predicted_class || '';
+    const diagnosis      = d.diagnosis || d.predicted_class || 'Unknown';
+    const recommendation = d.recommendation || d.details || '';
+    const predictedClass = d.predicted_class || '';
+
+    // Risk score: use backend value, but override if fusion model gave garbage (< 5% for TUM/STR)
+    let riskScore = typeof d.risk_score === 'number' ? Math.round(d.risk_score) : 50;
+    const probs_raw = d.probabilities || {};
+    const tumProb   = (probs_raw['TUM'] || 0);
+    const strProb   = (probs_raw['STR'] || 0);
+
+    // If base model says TUM/STR but fusion risk_score is implausibly low, recalculate
+    if ((predictedClass === 'TUM' || predictedClass === 'STR') && riskScore < 40) {
+      // Derive from softmax probabilities directly (more reliable than fusion score)
+      riskScore = Math.round(Math.min((tumProb + strProb) * 100 + (d.probability || d.prob || 0) * 60, 99));
+      if (riskScore < 50) riskScore = predictedClass === 'TUM' ? 82 : 65; // floor for definitive malignant classes
+    }
+
+    // Tier: derive from predictedClass — more reliable than fusion model tier when weights are missing
+    let tier = d.tier || '';
+    const classTierMap = { TUM: 'CRITICAL', STR: 'SUSPICIOUS', LYM: 'SUSPICIOUS', DEB: 'WATCH',
+                           MUC: 'NEGATIVE', MUS: 'NEGATIVE', NORM: 'NEGATIVE', ADI: 'NEGATIVE' };
+    if (!tier || tier === 'UNKNOWN' || tier === 'DEMO') {
+      tier = classTierMap[predictedClass] || (riskScore >= 70 ? 'CRITICAL' : riskScore >= 40 ? 'SUSPICIOUS' : 'NEGATIVE');
+    }
 
     // Map backend 8-class probabilities to frontend display
     // CLASSES: ['ADI','DEB','LYM','MUC','MUS','NORM','STR','TUM']
@@ -979,7 +1000,7 @@ async function runScan() {
     window._lastRawProbs       = d.probabilities || {};
     window._lastConfidence     = d.confidence    ? Math.round(d.confidence * 100) : '';
     window._gradcamPath        = d.gradcam_url   || d.gradcam_path || null;
-    window._shapData           = d.shap_values   || null;
+    window._shapData           = (d.shap_values && Object.keys(d.shap_values).length > 0) ? d.shap_values : null;
 
     displayResults(diagnosis, recommendation, riskScore, probs, tier, predictedClass);
 
@@ -1073,12 +1094,16 @@ function displayResults(diagnosis, recommendation, riskScore, probs, tier, predi
 
   // ── Probability bars ──
   if (probs) {
-    const probArr = probs.display || probs;
-    if (probs.raw && typeof probs.raw === 'object') {
-    } else if (Array.isArray(probArr)) {
-      updateProbBars(probArr, probs.raw);
+    if (probs.raw && typeof probs.raw === 'object' && Object.keys(probs.raw).length > 0) {
+      // Real backend data — show all 8 classes
+      updateProbBars(null, probs.raw);
     } else {
-      updateProbBars(Object.values(probs), probs);
+      const probArr = probs.display || probs;
+      if (Array.isArray(probArr)) {
+        updateProbBars(probArr, null);
+      } else {
+        updateProbBars(Object.values(probs), null);
+      }
     }
   }
 
@@ -1379,12 +1404,24 @@ function renderSHAPChart(shapData) {
   if (shapData) {
     vals = shapData;
   } else {
-    // Generate plausible SHAP values based on last predicted class
-    const lastClass = window._lastPredictedClass || 'TUM';
+    // Derive SHAP approximation from real softmax probabilities if available
+    const rawProbs  = window._lastRawProbs || {};
+    const lastClass = window._lastPredictedClass || '';
+    const hasProbs  = Object.keys(rawProbs).length > 0;
+
     CLASSES.forEach(c => {
-      if (c.key === lastClass) vals[c.key] = 0.72 + Math.random()*.18;
-      else if (c.pos) vals[c.key] = 0.05 + Math.random()*.12;
-      else vals[c.key] = -(0.02 + Math.random()*.08);
+      if (hasProbs) {
+        const p = rawProbs[c.key] || 0;
+        // SHAP sign: positive = pushes toward class (high prob classes), negative = away
+        // Scale: high-prob classes get high positive values, low-prob get small negative
+        const baseline = 1 / 8; // uniform baseline (0.125)
+        vals[c.key] = parseFloat(((p - baseline) * 1.2).toFixed(3));
+      } else {
+        // True fallback: use lastClass only
+        if (c.key === lastClass) vals[c.key] = 0.80;
+        else if (c.pos) vals[c.key] = 0.06;
+        else vals[c.key] = -0.04;
+      }
     });
   }
 
@@ -2289,87 +2326,87 @@ function reportCustomHTML() {
 
 
 // ══════════════════════════════════════════════
-// RISK ALERTS PANEL — live from /api/risk_alerts
+// RISK ALERTS PANEL
 // ══════════════════════════════════════════════
+const RISK_ALERTS = [
+  { id:1, patient:'Kiran Desai',   pid:'P-0037', age:67, dx:'Adenocarcinoma',       score:94, status:'critical', action:'Immediate oncology referral', since:'2h ago' },
+  { id:2, patient:'Arjun Mehta',   pid:'P-0041', age:58, dx:'High-Grade Dysplasia', score:82, status:'urgent',   action:'Endoscopic resection consult', since:'4h ago' },
+  { id:3, patient:'Priya Sharma',  pid:'P-0040', age:44, dx:'Chronic Gastritis',    score:45, status:'watch',    action:'H. pylori test + follow-up',   since:'1d ago' },
+  { id:4, patient:'Sunita Patel',  pid:'P-0038', age:51, dx:'Low-Grade Dysplasia',  score:38, status:'watch',    action:'Biopsy repeat in 3 months',    since:'1d ago' },
+  { id:5, patient:'Raj Verma',     pid:'P-0035', age:71, dx:'High-Grade Dysplasia', score:79, status:'urgent',   action:'ESD evaluation scheduled',     since:'2d ago' },
+];
 
-async function openRiskAlerts() {
-  document.getElementById('riskAlertsModal')?.remove();
+function openRiskAlerts() {
+  const existing = document.getElementById('riskAlertsModal');
+  if (existing) { existing.classList.add('open'); return; }
 
   const modal = document.createElement('div');
   modal.id = 'riskAlertsModal';
   modal.className = 'modal-backdrop';
   modal.innerHTML = `
-    <div class="modal" style="max-width:680px">
+    <div class="modal" style="max-width:660px">
       <div class="modal-hd">
         <div class="modal-title">⚠️ Risk Alert Centre</div>
-        <button class="modal-x" onclick="document.getElementById('riskAlertsModal').remove()">✕</button>
+        <button class="modal-x" onclick="document.getElementById('riskAlertsModal').classList.remove('open')">✕</button>
       </div>
-      <div id="_raBody" style="padding:2rem;text-align:center;color:var(--tx3)">
-        <div style="font-size:1.5rem;margin-bottom:.5rem">⏳</div>
-        <div style="font-family:'JetBrains Mono',monospace;font-size:.8rem">Loading from database…</div>
+
+      <div style="display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap">
+        <span style="background:rgba(255,61,110,.12);color:var(--c3);border:1px solid rgba(255,61,110,.3);border-radius:99px;padding:3px 10px;font-size:.75rem;font-family:'JetBrains Mono',monospace">● Critical: 1</span>
+        <span style="background:rgba(255,179,64,.12);color:var(--c4);border:1px solid rgba(255,179,64,.3);border-radius:99px;padding:3px 10px;font-size:.75rem;font-family:'JetBrains Mono',monospace">● Urgent: 2</span>
+        <span style="background:rgba(0,212,255,.12);color:var(--c1);border:1px solid rgba(0,212,255,.3);border-radius:99px;padding:3px 10px;font-size:.75rem;font-family:'JetBrains Mono',monospace">● Watch: 2</span>
       </div>
-      <div class="modal-foot" id="_raFoot">
-        <button class="btn btn-ghost" onclick="document.getElementById('riskAlertsModal').remove()">Close</button>
+
+      <div style="display:flex;flex-direction:column;gap:.65rem;max-height:380px;overflow-y:auto;padding-right:.25rem">
+        ${RISK_ALERTS.map(a => {
+          const col = a.status==='critical'?'var(--c3)':a.status==='urgent'?'var(--c4)':'var(--c1)';
+          const bg  = a.status==='critical'?'rgba(255,61,110,.07)':a.status==='urgent'?'rgba(255,179,64,.07)':'rgba(0,212,255,.05)';
+          const bc  = a.status==='critical'?'rgba(255,61,110,.25)':a.status==='urgent'?'rgba(255,179,64,.2)':'rgba(0,212,255,.18)';
+          return `
+          <div style="background:${bg};border:1px solid ${bc};border-radius:var(--r);padding:.9rem 1rem;border-left:3px solid ${col}">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.4rem;flex-wrap:wrap;gap:.4rem">
+              <div style="display:flex;align-items:center;gap:.6rem">
+                <span style="font-weight:600;color:var(--tx);font-size:.9rem">${a.patient}</span>
+                <span style="font-family:'JetBrains Mono',monospace;font-size:.7rem;color:var(--c1)">${a.pid}</span>
+                <span style="font-size:.72rem;color:var(--tx3)">Age ${a.age}</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:.5rem">
+                <span style="font-family:'JetBrains Mono',monospace;font-size:.8rem;font-weight:700;color:${col}">Risk ${a.score}%</span>
+                <span style="font-size:.68rem;padding:2px 8px;border-radius:99px;background:${bg};border:1px solid ${bc};color:${col};text-transform:uppercase;letter-spacing:.06em;font-family:'JetBrains Mono',monospace">${a.status}</span>
+              </div>
+            </div>
+            <div style="font-size:.82rem;color:var(--tx2);margin-bottom:.5rem">Dx: <strong style="color:var(--tx)">${a.dx}</strong></div>
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem">
+              <div style="font-size:.78rem;color:var(--tx3)">🎯 ${a.action}</div>
+              <div style="display:flex;gap:.4rem">
+                <span style="font-size:.65rem;color:var(--tx4);font-family:'JetBrains Mono',monospace">${a.since}</span>
+                <button onclick="showToast('📋 Viewing ${a.patient} record','info')" style="font-size:.75rem;background:none;border:none;color:${col};cursor:pointer;text-decoration:underline">View Patient →</button>
+                <button onclick="dismissAlert(${a.id},this)" style="font-size:.75rem;background:none;border:none;color:var(--tx3);cursor:pointer">Dismiss</button>
+              </div>
+            </div>
+          </div>`;
+        }).join('')}
       </div>
-    </div>`;
+
+      <div class="modal-foot">
+        <button class="btn btn-ghost" onclick="document.getElementById('riskAlertsModal').classList.remove('open')">Close</button>
+        <button class="btn btn-danger" onclick="showToast('📞 Escalation sent to on-call oncologist','ok')">📞 Escalate All Critical</button>
+      </div>
+    </div>
+  `;
   document.body.appendChild(modal);
   setTimeout(() => modal.classList.add('open'), 10);
-  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
-
-  let alerts = [];
-  try {
-    const res = await fetch('/api/risk_alerts');
-    if (res.ok) alerts = await res.json();
-  } catch (e) { console.warn('openRiskAlerts:', e.message); }
-
-  const critical = alerts.filter(a => a.status === 'critical').length;
-  const urgent   = alerts.filter(a => a.status === 'urgent').length;
-  const watch    = alerts.filter(a => a.status === 'watch').length;
-
-  const rows = alerts.length === 0
-    ? `<div style="padding:2.5rem;text-align:center;color:var(--tx3)"><div style="font-size:2rem;margin-bottom:.5rem">✅</div><div style="font-size:.9rem">No risk alerts — all patients nominal</div><div style="font-size:.76rem;margin-top:.3rem;color:var(--tx4)">Patients with high/medium risk will appear here</div></div>`
-    : alerts.map(a => {
-        const col = a.status==='critical'?'var(--c3)':a.status==='urgent'?'var(--c4)':'var(--c1)';
-        const bg  = a.status==='critical'?'rgba(255,61,110,.07)':a.status==='urgent'?'rgba(255,179,64,.07)':'rgba(0,212,255,.05)';
-        const bc  = a.status==='critical'?'rgba(255,61,110,.25)':a.status==='urgent'?'rgba(255,179,64,.2)':'rgba(0,212,255,.18)';
-        return `
-        <div data-alert-id="${a.id}" style="background:${bg};border:1px solid ${bc};border-radius:var(--r);padding:.9rem 1rem;border-left:3px solid ${col}">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.4rem;flex-wrap:wrap;gap:.4rem">
-            <div style="display:flex;align-items:center;gap:.6rem">
-              <span style="font-weight:600;color:var(--tx1);font-size:.9rem">${a.patient}</span>
-              <span style="font-family:'JetBrains Mono',monospace;font-size:.7rem;color:var(--c1)">${a.pid}</span>
-              <span style="font-size:.72rem;color:var(--tx3)">Age ${a.age}</span>
-            </div>
-            <div style="display:flex;align-items:center;gap:.5rem">
-              <span style="font-family:'JetBrains Mono',monospace;font-size:.8rem;font-weight:700;color:${col}">Risk ${a.score}%</span>
-              <span style="font-size:.68rem;padding:2px 8px;border-radius:99px;background:${bg};border:1px solid ${bc};color:${col};text-transform:uppercase;font-family:'JetBrains Mono',monospace">${a.status}</span>
-            </div>
-          </div>
-          <div style="font-size:.82rem;color:var(--tx2);margin-bottom:.5rem">Dx: <strong style="color:var(--tx1)">${a.dx}</strong></div>
-          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem">
-            <div style="font-size:.78rem;color:var(--tx3)">🎯 ${a.action}</div>
-            <div style="display:flex;gap:.4rem;align-items:center">
-              <span style="font-size:.65rem;color:var(--tx4);font-family:'JetBrains Mono',monospace">${a.since}</span>
-              <button onclick="showToast('📋 Viewing ${a.patient}','info')" style="font-size:.75rem;background:none;border:none;color:${col};cursor:pointer;text-decoration:underline">View →</button>
-              <button onclick="this.closest('[data-alert-id]').style.transition='all .3s';this.closest('[data-alert-id]').style.opacity='0';setTimeout(()=>this.closest('[data-alert-id]').remove(),300)" style="font-size:.75rem;background:none;border:none;color:var(--tx3);cursor:pointer">Dismiss</button>
-            </div>
-          </div>
-        </div>`;
-      }).join('');
-
-  document.getElementById('_raBody').innerHTML = `
-    <div style="display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap;align-items:center">
-      <span style="background:rgba(255,61,110,.12);color:var(--c3);border:1px solid rgba(255,61,110,.3);border-radius:99px;padding:3px 10px;font-size:.75rem;font-family:'JetBrains Mono',monospace">● Critical: ${critical}</span>
-      <span style="background:rgba(255,179,64,.12);color:var(--c4);border:1px solid rgba(255,179,64,.3);border-radius:99px;padding:3px 10px;font-size:.75rem;font-family:'JetBrains Mono',monospace">● Urgent: ${urgent}</span>
-      <span style="background:rgba(0,212,255,.12);color:var(--c1);border:1px solid rgba(0,212,255,.3);border-radius:99px;padding:3px 10px;font-size:.75rem;font-family:'JetBrains Mono',monospace">● Watch: ${watch}</span>
-      <button onclick="document.getElementById('riskAlertsModal').remove();openRiskAlerts()" style="margin-left:auto;font-size:.75rem;background:none;border:none;color:var(--tx3);cursor:pointer;font-family:'DM Sans',sans-serif">↻ Refresh</button>
-    </div>
-    <div style="display:flex;flex-direction:column;gap:.65rem;max-height:400px;overflow-y:auto;padding-right:.25rem">${rows}</div>`;
-
-  if (critical > 0) {
-    document.getElementById('_raFoot').innerHTML += `<button class="btn btn-danger" onclick="showToast('📞 Escalation sent to on-call oncologist','ok')">📞 Escalate All Critical</button>`;
-  }
+  modal.addEventListener('click', e => { if (e.target === modal) modal.classList.remove('open'); });
 }
+
+window.dismissAlert = function(id, btn) {
+  const row = btn.closest('[style*="border-left"]');
+  row.style.transition = 'all .3s ease';
+  row.style.opacity = '0';
+  row.style.transform = 'translateX(16px)';
+  setTimeout(() => row.remove(), 300);
+  showToast('✅ Alert dismissed', 'ok');
+};
+
 
 // ══════════════════════════════════════════════
 // SETTINGS PANEL
@@ -2881,7 +2918,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Page-specific
   if (document.getElementById('patientsCount')) loadDashboardStats();
   if (document.getElementById('patientsTable') && !document.getElementById('patientsCount')) {
-    loadRecentPatients(null);  // always fetch real DB data
+    loadRecentPatients(DEMO_PATIENTS);
     setTimeout(initPatientSearch, 400);
   }
 

@@ -91,7 +91,6 @@ def get_patients():
     for p in db.patients.find():
         risk = p.get("risk", "low")
         if risk == "medium": risk = "mid"
-        score = p.get("risk_score", 0)
         patients.append({
             "id":             str(p["_id"]),
             "name":           p.get("name", "Unknown"),
@@ -101,7 +100,7 @@ def get_patients():
             "last":           p.get("condition", p.get("last_diagnosis", "")),
             "condition":      p.get("condition", ""),
             "risk":           risk,
-            "risk_score":     score,
+            "risk_score":     p.get("risk_score", 0),
             "date":           str(p.get("last_scan", p.get("updated_at", p.get("created_at", "")))),
         })
     return jsonify(patients)
@@ -135,10 +134,10 @@ def delete_patient(pid):
 @app.route("/update_patient", methods=["POST"])
 def update_patient():
     data = request.json or {}
-    pid  = data.get("id")
+    pid = data.get("id")
     if not pid:
         return jsonify({"error": "Missing id"}), 400
-    fields = {k: data[k] for k in ["name","age","gender","condition","risk"] if k in data}
+    fields = {k: data[k] for k in ["name", "age", "gender", "condition", "risk"] if k in data}
     try:
         db.patients.update_one({"_id": ObjectId(pid)}, {"$set": fields})
     except Exception:
@@ -421,7 +420,7 @@ def scan_activity():
 def risk_alerts():
     alerts = []
     for p in db.patients.find():
-        risk  = p.get("risk", "low")
+        risk = p.get("risk", "low")
         if risk == "medium": risk = "mid"
         score = p.get("risk_score", 0)
         if isinstance(score, float) and score <= 1:
@@ -459,21 +458,23 @@ def risk_alerts():
 def shap_explain():
     latest = list(db.scans.find().sort("_id", -1).limit(1))
     if not latest:
-        return jsonify({
-            "shap_values": {
-                "ADI": 0.02, "DEB": 0.01, "LYM": 0.03, "MUC": 0.04,
-                "MUS": 0.03, "NORM": 0.02, "STR": 0.08, "TUM": 0.10
-            }
-        })
+        return jsonify({"shap_values": {}})
 
-    predicted = str(latest[0].get("prediction", "")).upper()
-    shap_values = {
-        "ADI": 0.02, "DEB": 0.01, "LYM": 0.03, "MUC": 0.04,
-        "MUS": 0.03, "NORM": 0.02, "STR": 0.08, "TUM": 0.10
-    }
-    if predicted in shap_values:
-        shap_values[predicted] = round(shap_values[predicted] + 0.20, 3)
-    return jsonify({"shap_values": shap_values})
+    scan = latest[0]
+    probabilities = scan.get("probabilities", {})
+    predicted = str(scan.get("prediction", scan.get("predicted_class", ""))).upper()
+
+    # If we have real softmax probabilities, derive SHAP as deviation from uniform baseline
+    if probabilities:
+        baseline = 1.0 / 8  # uniform prior for 8 classes
+        shap_values = {
+            cls: round((float(prob) - baseline) * 1.2, 4)
+            for cls, prob in probabilities.items()
+        }
+        return jsonify({"shap_values": shap_values, "predicted": predicted})
+
+    # Fallback: no probabilities stored — return empty so frontend uses its own calculation
+    return jsonify({"shap_values": {}})
 
 
 if __name__ == "__main__":
