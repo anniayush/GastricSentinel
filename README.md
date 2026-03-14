@@ -32,3 +32,13 @@ tabular data, and fused embeddings.
 - ✅ Clinician-trusted explainability
 <br>
 - ✅ Production-ready architecture
+<br>
+<h1>DATASETS</h1>
+-✅ Cancer Cells <a href="https://www.kaggle.com/datasets/orvile/gastric-cancer-histopathology-tissue-image-dataset"> " LINK " </a>
+<br>
+-✅ Genomical Dastaset(download) <a href="https://gdc-hub.s3.us-east-1.amazonaws.com/download/TCGA-STAD.star_fpkm.tsv.gz; Full metadata"> " LINK " </a>
+<br>
+-✅ Clinical Dataset <a href="https://portal.gdc.cancer.gov/projects/TCGA-STAD"> " LINK " </a>
+
+
+
