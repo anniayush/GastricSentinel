@@ -1,13 +1,13 @@
-# Gastric Sentinel 
-**Advanced AI-driven diagnostic framework designed for early gastric cancer detection 
-and lesion segmentation, leveraging a multi-modal fusion layer**.
+<h1>Gastric Sentinel</h1> 
+Advanced AI-driven diagnostic framework designed for early gastric cancer detection 
+and lesion segmentation, leveraging a multi-modal fusion layer.
 To integrate diverse data sources like endoscopic images, CT/MRI scans, 
 and clinical metadata.
 <br>
-# The multi-modal fusion layer 
-Employs a **dual-branch architecture**_typically combining a CNN
+<h2>The Multi-Modal Fusion Layer</h2> 
+Employs a **dual-branch architecture** typically combining a CNN
 based U-Net for local feature extraction from imaging modalities and a Transformer (e.g., Swin-Transformer) 
-for capturing long-range dependencies—followed by a Feature Fusion (FF) module that uses linear Hadamard products
+for capturing long-range dependencies followed by a Feature Fusion (FF) module that uses linear Hadamard products
  and cross-modal attention to interactively merge features at multiple scales, enhancing lesion boundary precision.
 <br>
 <br>
@@ -23,9 +23,9 @@ quantifying contributions from radiomic features(e.g., shape eccentricity, Haral
 tabular data, and fused embeddings.
 <br>
 <br>
-# Features
+<h2>Features</h2>
 <br>
-- ✅ Multi-modal: Endoscopy + CT/MRI + clinical data
+- ✅ Multi-modal: Endoscopy + Genomical Data + clinical data
 <br>
 - ✅ Precise lesion boundary detection
 <br>
