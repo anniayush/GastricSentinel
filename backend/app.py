@@ -5,7 +5,7 @@ from pathlib import Path
 from urllib import request as urllib_request
 from flask import Flask, request, jsonify, render_template, send_file
 from database import get_db
-from predict import run_prediction, fusion_model as prediction_model
+from predict import run_prediction, _MASTER_MODEL as _base_model
 from gradcam import generate_gradcam
 from shap_explainer import generate_shap, get_class_shap_scores
 from utils import preprocess_image, clinical_to_tensor, genomic_to_tensor
@@ -148,33 +148,31 @@ def update_patient():
 @app.route("/predict", methods=["POST"])
 def predict():
     file = request.files["image"]
-    filename = file.filename
-    path = UPLOAD_FOLDER / filename
+
+    import os as _os
+    from uuid import uuid4 as _uuid4
+    ext      = _os.path.splitext(file.filename)[-1] or ".png"
+    filename = f"{_uuid4().hex}{ext}"
+    path     = UPLOAD_FOLDER / filename
     file.save(str(path))
 
-    age = int(request.form.get("age", 0))
-    gender = request.form.get("gender", "Male")
-    stage = request.form.get("stage", "I")
-    gene_score = float(request.form.get("gene_score", 0))
+    age          = int(request.form.get("age", 0))
+    gender       = request.form.get("gender", "Male")
+    stage        = request.form.get("stage", "I")
+    gene_score   = float(request.form.get("gene_score", 0))
     genomic_risk = float(request.form.get("genomic_risk", 0))
 
     img_tensor = preprocess_image(str(path))
     clinical_t = clinical_to_tensor(age, gender, stage)
-    genomic_t = genomic_to_tensor([gene_score, genomic_risk])
+    genomic_t  = genomic_to_tensor([gene_score, genomic_risk])
 
     prediction = run_prediction(img_tensor, age, gender, stage, gene_score, genomic_risk)
 
-    # GradCAM: always use base ResNet50 (has trained weights + layer4)
-    from model_loader import load_model as _load_base
-    _base_model = _load_base()
     gradcam_path = generate_gradcam(_base_model, str(path), clinical_t, genomic_t)
+    shap_path    = generate_shap(_base_model, str(path), clinical_t, genomic_t)
 
-    # SHAP image overlay (if cv2+shap installed) — for optional future display
-    shap_path = generate_shap(_base_model, str(path), clinical_t, genomic_t)
-
-    # Per-class SHAP scores for the bar chart in the frontend
     from utils import CLASSES as _CLASSES
-    shap_scores = get_class_shap_scores(str(path), _CLASSES)
+    shap_scores = get_class_shap_scores(_base_model, str(path), _CLASSES, clinical_t, genomic_t)
 
     scan = {
         "prediction":      prediction["label"],
@@ -202,7 +200,7 @@ def predict():
         "probabilities":   prediction["probabilities"],
         "gradcam_url":     gradcam_path,
         "shap_url":        shap_path,
-        "shap_values":     shap_scores,    # per-class dict for frontend bar chart
+        "shap_values":     shap_scores,
     })
 
 
@@ -252,78 +250,147 @@ def generate_report_endpoint():
 
     data = request.json or {}
 
+    report_id = f"GS-{int(datetime.utcnow().timestamp())}"
+
+    patient_name = data.get("patient_name", "Anonymous")
+    patient_age = data.get("patient_age", "")
+    patient_id = data.get("patient_id", "")
+    patient_gender = data.get("patient_gender", "")
+    doctor = data.get("doctor", "Dr. Admin")
+    hospital = data.get("hospital", "Gastric Sentinel Lab")
+
+    diagnosis = data.get("diagnosis", "")
+    predicted_class = data.get("predicted_class", "")
+    confidence = data.get("confidence", "")
+    risk_score = data.get("risk_score", "")
+    tier = data.get("tier", "")
+    recommendation = data.get("recommendation", "Consult a specialist.")
+    notes = data.get("notes", "")
+    probs = data.get("probabilities", {})
+
+
+    UPLOAD_DIR = STATIC_DIR / "uploads"
+
+    input_image_path = UPLOAD_DIR / "input_image.png"
+    gradcam_path = UPLOAD_DIR / "gradcam.png"
+    shap_path = UPLOAD_DIR / "shap_plot.png"
+    logo_path = STATIC_DIR / "logo.png"
+
     c = canvas_mod.Canvas(str(REPORT_PATH), pagesize=letter)
 
-    logo_path = STATIC_DIR / "logo.png"
     if os.path.exists(logo_path):
         c.drawImage(str(logo_path), 50, 730, width=50, height=50)
 
     c.setFont("Helvetica-Bold", 18)
-    c.drawString(120, 750, "Gastric Sentinel Diagnostic Report")
-    report_id = f"GS-{int(datetime.utcnow().timestamp())}"
-    patient_name = data.get("patient_name", "Anonymous")
-    patient_age  = data.get("patient_age", "")
-    patient_id   = data.get("patient_id", "")
-    patient_gender = data.get("patient_gender", "")
-    notes        = data.get("notes", "")
+    c.drawString(120, 750, "Gastric Sentinel")
 
-    c.setFont("Helvetica-Bold", 13)
-    c.setFillColorRGB(0.1, 0.1, 0.15)
-    c.drawString(100, 718, "PATIENT INFORMATION")
-    c.setFont("Helvetica", 11)
-    c.setFillColorRGB(0.2, 0.2, 0.25)
-    c.drawString(100, 702, f"Name: {patient_name}")
-    c.drawString(320, 702, f"Age: {patient_age}   Gender: {patient_gender}")
-    c.drawString(100, 686, f"Patient ID / MRN: {patient_id or 'Not provided'}")
-    c.drawString(320, 686, f"Physician: {data.get('doctor', 'Dr. Admin')}")
-    c.drawString(100, 670, f"Institution: {data.get('hospital', '')}")
-    c.drawString(320, 670, f"Report ID: {report_id}")
-    c.setStrokeColorRGB(0.8, 0.8, 0.85)
-    c.line(100, 662, 510, 662)
+    c.setFont("Helvetica", 12)
+    c.drawString(120, 730, "AI Assisted Gastric Diagnostic Report")
 
-    c.setFont("Helvetica-Bold", 13)
-    c.setFillColorRGB(0.1, 0.1, 0.15)
-    c.drawString(100, 648, "AI ANALYSIS RESULT")
-    c.setFont("Helvetica", 11)
-    c.setFillColorRGB(0.2, 0.2, 0.25)
-    c.drawString(100, 632, f"Diagnosis: {data.get('diagnosis', '')}")
-    c.drawString(100, 616, f"Predicted Class: {data.get('predicted_class', '')}   Confidence: {data.get('confidence', '')}%   Risk Score: {data.get('risk_score', '')}%")
-    c.drawString(100, 600, f"Tier: {data.get('tier', '')}")
-    c.line(100, 592, 510, 592)
-
-    c.setFont("Helvetica-Bold", 13)
-    c.drawString(100, 578, "RECOMMENDATION")
     c.setFont("Helvetica", 10)
-    c.setFillColorRGB(0.25, 0.25, 0.3)
-    rec_text = data.get("recommendation", "Consult a specialist.")
-    y_rec = 562
-    for line in [rec_text[i:i+85] for i in range(0, len(rec_text), 85)]:
-        c.drawString(100, y_rec, line)
+    c.drawString(400, 750, f"Report ID: {report_id}")
+    c.drawString(400, 735, datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"))
+
+    c.line(50, 720, 550, 720)
+
+    c.setFont("Helvetica-Bold", 13)
+    c.drawString(50, 700, "Patient Information")
+
+    c.setFont("Helvetica", 11)
+    c.drawString(50, 680, f"Name: {patient_name}")
+    c.drawString(300, 680, f"Age: {patient_age}")
+
+    c.drawString(50, 665, f"Gender: {patient_gender}")
+    c.drawString(300, 665, f"Patient ID: {patient_id}")
+
+    c.drawString(50, 650, f"Physician: {doctor}")
+    c.drawString(300, 650, f"Institution: {hospital}")
+
+    c.line(50, 640, 550, 640)
+
+    c.setFont("Helvetica-Bold", 13)
+    c.drawString(50, 620, "AI Diagnosis Summary")
+
+    c.setFont("Helvetica", 11)
+    c.drawString(50, 600, f"Diagnosis: {diagnosis}")
+
+    c.drawString(50, 585, f"Predicted Class: {predicted_class}")
+    c.drawString(300, 585, f"Risk Tier: {tier}")
+
+    c.drawString(50, 570, f"Confidence: {confidence}%")
+    c.drawString(300, 570, f"Risk Score: {risk_score}%")
+
+    c.line(50, 560, 550, 560)
+
+    if probs:
+        c.setFont("Helvetica-Bold", 13)
+        c.drawString(50, 540, "Class Probability Distribution")
+
+        c.setFont("Helvetica", 10)
+        y = 520
+
+        for cls, val in sorted(probs.items(), key=lambda x: -x[1]):
+            percent = round(val * 100, 2)
+            c.drawString(60, y, f"{cls}: {percent}%")
+            y -= 14
+
+    c.setFont("Helvetica-Bold", 13)
+    c.drawString(50, 450, "AI Visual Explanation")
+
+    # Input Image
+    if os.path.exists(input_image_path):
+        c.setFont("Helvetica", 10)
+        c.drawString(50, 435, "Input Image")
+        c.drawImage(str(input_image_path), 50, 320, width=150, height=100)
+
+    # GradCAM
+    if os.path.exists(gradcam_path):
+        c.setFont("Helvetica", 10)
+        c.drawString(220, 435, "Grad-CAM Heatmap")
+        c.drawImage(str(gradcam_path), 220, 320, width=150, height=100)
+
+    # SHAP
+    if os.path.exists(shap_path):
+        c.setFont("Helvetica", 10)
+        c.drawString(390, 435, "SHAP Feature Importance")
+        c.drawImage(str(shap_path), 390, 320, width=150, height=100)
+
+    c.line(50, 300, 550, 300)
+
+    c.setFont("Helvetica-Bold", 13)
+    c.drawString(50, 280, "Recommendation")
+
+    c.setFont("Helvetica", 10)
+    y_rec = 265
+
+    for line in [recommendation[i:i+90] for i in range(0, len(recommendation), 90)]:
+        c.drawString(50, y_rec, line)
         y_rec -= 14
 
     if notes:
-        c.line(100, y_rec - 4, 510, y_rec - 4)
         c.setFont("Helvetica-Bold", 13)
-        c.setFillColorRGB(0.1, 0.1, 0.15)
-        c.drawString(100, y_rec - 20, "CLINICAL NOTES")
-        c.setFont("Helvetica", 10)
-        c.setFillColorRGB(0.25, 0.25, 0.3)
-        y_n = y_rec - 36
-        for line in [notes[i:i+85] for i in range(0, len(notes), 85)]:
-            c.drawString(100, y_n, line)
-            y_n -= 14
+        c.drawString(50, y_rec - 10, "Clinical Notes")
 
-    c.drawString(100, 80, f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}   |   Report ID: {report_id}")
-
-    probs = data.get("probabilities", {})
-    if probs:
-        c.setFont("Helvetica-Bold", 11)
-        c.drawString(100, 505, "Class Probabilities:")
         c.setFont("Helvetica", 10)
-        y = 490
-        for cls, val in sorted(probs.items(), key=lambda x: -x[1]):
-            c.drawString(110, y, f"{cls}: {round(val * 100, 1)}%")
-            y -= 14
+        y_notes = y_rec - 25
+
+        for line in [notes[i:i+90] for i in range(0, len(notes), 90)]:
+            c.drawString(50, y_notes, line)
+            y_notes -= 14
+            
+    c.setFont("Helvetica", 9)
+
+    c.drawString(
+        50,
+        80,
+        f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} | Report ID: {report_id}"
+    )
+
+    c.drawString(
+        50,
+        65,
+        "Disclaimer: This AI-generated report is for research assistance only and must be verified by a medical professional."
+    )
 
     c.save()
 
