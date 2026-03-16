@@ -239,7 +239,7 @@
                 <div class="heatbar"></div>
                 <span>Hot</span>
               </div>
-              <button class="btn btn-ghost btn-sm" onclick="const img=document.querySelector('#gradcamWrap img');if(img)openZoomViewer(img.src,'GradCAM — Pathology Scan');else showToast('Run a scan first to use zoom','warn')" style="margin-left:.5rem">🔍 Zoom</button>
+              <button class="btn btn-ghost btn-sm" id="gradcamZoomBtn" onclick="openGradcamZoom()" style="margin-left:.5rem">🔍 Zoom</button>
             </div>
             <div class="alert alert-info mt-2" style="font-size:.78rem;margin-bottom:0">
               ℹ️ Red/orange regions indicate highest model attention — areas most influential for the diagnosis.
