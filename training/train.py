@@ -1,0 +1,160 @@
+import os
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchvision import datasets, models, transforms
+from torch.utils.data import DataLoader, Subset
+from sklearn.model_selection import train_test_split
+from tqdm import tqdm
+import time
+
+# --- CONFIGURATION ---
+DATA_PATH = os.path.join('cancer_project', 'raw')  # Update this to your actual data path
+MODEL_SAVE_PATH = os.path.join('models', 'gastric_resnet50.pth')
+
+BATCH_SIZE = 32
+EPOCHS = 15
+LEARNING_RATE = 0.0001
+VAL_SPLIT = 0.2
+
+# 8 Classes
+CLASSES = ['ADI', 'DEB', 'LYM', 'MUC', 'MUS', 'NORM', 'STR', 'TUM']
+
+
+def get_data_loaders():
+    print("Preparing Data...")
+
+    # 1. Define Transforms
+    train_transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomVerticalFlip(),
+        transforms.RandomRotation(15),
+        transforms.ColorJitter(brightness=0.1, contrast=0.1),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ])
+
+    val_transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ])
+
+    # 2. Load Dataset TWICE (Bulletproof strategy)
+    # We load the same data folder twice, but attach different transforms to each.
+    # This avoids all the complex class inheritance bugs.
+    full_train_dataset = datasets.ImageFolder(DATA_PATH, transform=train_transform)
+    full_val_dataset = datasets.ImageFolder(DATA_PATH, transform=val_transform)
+
+    # 3. Create the Split Indices
+    # We use the targets from one of them to ensure stratified splitting
+    train_idx, val_idx = train_test_split(
+        list(range(len(full_train_dataset))),
+        test_size=VAL_SPLIT,
+        stratify=full_train_dataset.targets
+    )
+
+    # 4. Create Subsets
+    # We pass the specific indices to the specific dataset version
+    train_ds = Subset(full_train_dataset, train_idx)
+    val_ds = Subset(full_val_dataset, val_idx)
+
+    # 5. Create Loaders
+    # We set num_workers=0 temporarily to maximize compatibility on your CPU setup.
+    # If this works, you can try changing it back to 2 or 4 later for speed.
+    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
+    val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
+
+    print(f"Data Loaded: {len(train_ds)} Training images, {len(val_ds)} Validation images.")
+    return train_loader, val_loader
+
+
+def train_model():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Compute Device: {device}")
+
+    train_loader, val_loader = get_data_loaders()
+
+    print("Initializing ResNet50...")
+    model = models.resnet50(weights='IMAGENET1K_V1')
+
+    # Freeze layers
+    for param in model.parameters():
+        param.requires_grad = False
+
+    # Replace Head
+    num_ftrs = model.fc.in_features
+    model.fc = nn.Linear(num_ftrs, len(CLASSES))
+
+    model = model.to(device)
+
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.fc.parameters(), lr=LEARNING_RATE)
+
+    best_acc = 0.0
+    start_time = time.time()
+
+    for epoch in range(EPOCHS):
+        print(f"\nEpoch {epoch + 1}/{EPOCHS}")
+        print("-" * 10)
+
+        # --- Training Phase ---
+        model.train()
+        running_loss = 0.0
+        running_corrects = 0
+
+        for inputs, labels in tqdm(train_loader, desc="Training"):
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+
+            optimizer.zero_grad()
+
+            outputs = model(inputs)
+            _, preds = torch.max(outputs, 1)
+            loss = criterion(outputs, labels)
+
+            loss.backward()
+            optimizer.step()
+
+            running_loss += loss.item() * inputs.size(0)
+            running_corrects += torch.sum(preds == labels.data)
+
+        epoch_loss = running_loss / len(train_loader.dataset)
+        epoch_acc = running_corrects.double() / len(train_loader.dataset)
+        print(f"Train Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}")
+
+        # --- Validation Phase ---
+        model.eval()
+        val_loss = 0.0
+        val_corrects = 0
+
+        with torch.no_grad():
+            for inputs, labels in tqdm(val_loader, desc="Validating"):
+                inputs = inputs.to(device)
+                labels = labels.to(device)
+
+                outputs = model(inputs)
+                _, preds = torch.max(outputs, 1)
+                loss = criterion(outputs, labels)
+
+                val_loss += loss.item() * inputs.size(0)
+                val_corrects += torch.sum(preds == labels.data)
+
+        val_loss = val_loss / len(val_loader.dataset)
+        val_acc = val_corrects.double() / len(val_loader.dataset)
+        print(f"Val Loss:   {val_loss:.4f} Acc: {val_acc:.4f}")
+
+        if val_acc > best_acc:
+            best_acc = val_acc
+            os.makedirs(os.path.dirname(MODEL_SAVE_PATH), exist_ok=True)
+            torch.save(model.state_dict(), MODEL_SAVE_PATH)
+            print(f"⭐️ Model Improved! Saved to {MODEL_SAVE_PATH}")
+
+    total_time = time.time() - start_time
+    print(f"\nTraining Complete in {total_time // 60:.0f}m {total_time % 60:.0f}s")
+    print(f"Best Validation Accuracy: {best_acc:.4f}")
+
+
+if __name__ == "__main__":
+    train_model()
