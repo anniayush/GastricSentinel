@@ -115,8 +115,14 @@ function animateRiskBars() {
 // ── Load Dashboard Stats ─────────────────────
 async function loadDashboardStats() {
   try {
-    const res = await fetch('/stats');
-    const data = await res.json();
+    const result = await atlasRequest("find", { filter: {}, limit: 1000 });
+    const patients = result.documents || [];
+    const data = {
+      total_patients: patients.length,
+      total_scans: patients.length * 4,
+      high_risk: patients.filter(p => (p.risk || '').toLowerCase() === 'high').length,
+      model_accuracy: 70,
+    };
     const p = document.getElementById('patientsCount');
     const s = document.getElementById('scansCount');
     const r = document.getElementById('riskCount');
@@ -220,15 +226,12 @@ async function loadRecentPatients(forcedData) {
 
   if (!data) {
     try {
-      const res = await fetch('/patients');
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const json = await res.json();
-      // Backend might return {patients:[...]} or just [...]
-      data = Array.isArray(json) ? json : (json.patients || json.data || []);
-    } catch (e) {
-      console.warn('Could not load patients from /patients:', e.message);
-      data = null;
-    }
+  const result = await atlasRequest("find", { filter: {}, limit: 100 });
+  data = result.documents || [];
+} catch (e) {
+  console.warn('Atlas fetch failed:', e.message);
+  data = null;
+}
   }
 
   // If backend returned nothing, try /get_patients as alternate endpoint
@@ -374,7 +377,10 @@ window.saveEditPatient = function(id) {
       setTimeout(() => { row.style.transition = 'background .8s'; row.style.background = ''; }, 1200);
     }
   });
-  fetch('/update_patient', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id,name,age:parseInt(age),gender,condition:cond,risk}) }).catch(()=>{});
+  atlasRequest("updateOne", {
+  filter: { id },
+  update: { $set: { name, age: parseInt(age), gender, last: cond, risk } }
+}).catch(() => {});
   document.getElementById('editPatientModal').classList.remove('open');
   showToast('✅ Patient ' + name + ' updated', 'ok');
 };
@@ -385,7 +391,8 @@ async function deletePatient(btn, id) {
   row.style.transform = 'translateX(20px)';
   setTimeout(() => row.remove(), 300);
   try {
-    const res = await fetch(`/delete_patient/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const result = await atlasRequest("deleteOne", { filter: { id } });
+    const res = { ok: result.deletedCount > 0 };
     if (res.ok) showToast('🗑 Patient deleted from database', 'info');
     else showToast('🗑 Patient removed (demo)', 'info');
     const cntEl = document.getElementById('patientsCount');
@@ -775,7 +782,7 @@ let _lastNotifiedRiskScore = 0;
 
 function checkAndTriggerRiskNotification(riskScore, diagnosis, tier, predictedClass) {
   const score = typeof riskScore === 'number' ? riskScore : parseInt(riskScore) || 0;
-  if (score < 70 || score <= _lastNotifiedRiskScore) { _lastNotifiedRiskScore = score; return; }
+  if (score < 75 || score <= _lastNotifiedRiskScore) { _lastNotifiedRiskScore = score; return; }
   _lastNotifiedRiskScore = score;
 
   NOTIFICATIONS.unshift({ id:'live_'+Date.now(), type:'high', icon:'🚨',
@@ -902,10 +909,15 @@ window.resetUploadZone = function(btn) {
 
 // ── AI Scan / Predict ────────────────────────
 const DEMO_DIAGNOSES = [
-  { diagnosis: 'High-Grade Dysplasia', recommendation: 'Immediate endoscopic resection recommended. Refer to oncology within 48 hours. Schedule follow-up biopsy in 2 weeks.', risk: 82, probs: [82,11,5,2,0] },
-  { diagnosis: 'Low-Grade Dysplasia', recommendation: 'Endoscopic surveillance every 6 months. Consider biopsy repeat. Monitor H. pylori status.', risk: 45, probs: [15,45,25,13,2] },
-  { diagnosis: 'Chronic Atrophic Gastritis', recommendation: 'H. pylori eradication therapy if positive. Annual endoscopic surveillance. Vitamin B12 supplementation.', risk: 28, probs: [5,20,28,40,7] },
-  { diagnosis: 'Normal Gastric Mucosa', recommendation: 'No immediate intervention required. Routine screening in 2 years. Maintain healthy diet and H. pylori screening.', risk: 6, probs: [1,3,6,12,78] },
+  // probs order matches BACKEND_CLASSES: TUM, STR, LYM, DEB, MUC, MUS, NORM, ADI
+  { diagnosis: 'High-Grade Dysplasia', recommendation: 'Immediate endoscopic resection recommended. Refer to oncology within 48 hours. Schedule follow-up biopsy in 2 weeks.', risk: 82,
+    probs: { TUM:0.82, STR:0.11, LYM:0.03, DEB:0.01, MUC:0.01, MUS:0.01, NORM:0.00, ADI:0.01 } },
+  { diagnosis: 'Low-Grade Dysplasia', recommendation: 'Endoscopic surveillance every 6 months. Consider biopsy repeat. Monitor H. pylori status.', risk: 45,
+    probs: { TUM:0.15, STR:0.45, LYM:0.18, DEB:0.05, MUC:0.08, MUS:0.04, NORM:0.03, ADI:0.02 } },
+  { diagnosis: 'Chronic Atrophic Gastritis', recommendation: 'H. pylori eradication therapy if positive. Annual endoscopic surveillance. Vitamin B12 supplementation.', risk: 28,
+    probs: { TUM:0.05, STR:0.10, LYM:0.20, DEB:0.08, MUC:0.28, MUS:0.12, NORM:0.10, ADI:0.07 } },
+  { diagnosis: 'Normal Gastric Mucosa', recommendation: 'No immediate intervention required. Routine screening in 2 years. Maintain healthy diet and H. pylori screening.', risk: 6,
+    probs: { TUM:0.01, STR:0.02, LYM:0.04, DEB:0.02, MUC:0.10, MUS:0.08, NORM:0.65, ADI:0.08 } },
 ];
 
 async function runScan() {
@@ -981,7 +993,7 @@ async function runScan() {
     const d = DEMO_DIAGNOSES[Math.floor(Math.random() * DEMO_DIAGNOSES.length)];
     window._lastPredictedClass = 'TUM';
     window._shapData = null;
-    setTimeout(() => displayResults(d.diagnosis, d.recommendation, d.risk, { display: d.probs }, d.tier || 'DEMO', ''), 2800);
+    setTimeout(() => displayResults(d.diagnosis, d.recommendation, d.risk, { raw: d.probs }, d.tier || 'DEMO', ''), 2800);
   }
 }
 
@@ -1087,6 +1099,157 @@ function displayResults(diagnosis, recommendation, riskScore, probs, tier, predi
   const toastIcon = tierIcons[tierLabel] || '🔬';
   showToast(`${toastIcon} ${diagnosis} — Risk ${riskScore}%`, tierLabel==='CRITICAL'?'warn':'ok');
   document.getElementById('resultBox')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  // ── Urgent Doctor Notification (risk > 75%) ──
+  if (riskScore > 75) {
+    showUrgentDoctorAlert(riskScore, diagnosis);
+  }
+}
+
+function showUrgentDoctorAlert(riskScore, diagnosis) {
+  // Remove any existing alert
+  document.getElementById('urgentDoctorAlert')?.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'urgentDoctorAlert';
+  overlay.style.cssText = `
+    position:fixed; inset:0; z-index:9999;
+    background:rgba(0,0,0,.72);
+    display:flex; align-items:center; justify-content:center;
+    animation:urgentFadeIn .25s ease;
+    backdrop-filter:blur(4px);
+  `;
+
+  // Inject keyframes once
+  if (!document.getElementById('urgentAlertCSS')) {
+    const s = document.createElement('style');
+    s.id = 'urgentAlertCSS';
+    s.textContent = `
+      @keyframes urgentFadeIn { from { opacity:0; } to { opacity:1; } }
+      @keyframes urgentPulse  { 0%,100% { box-shadow:0 0 0 0 rgba(255,61,110,.55); } 60% { box-shadow:0 0 0 18px rgba(255,61,110,0); } }
+      @keyframes urgentBell   { 0%,100%{transform:rotate(0)} 10%,30%,50%,70%{transform:rotate(-14deg)} 20%,40%,60%,80%{transform:rotate(14deg)} }
+      #urgentDoctorAlert .ua-card { animation:urgentPulse 1.8s ease infinite; }
+      #urgentDoctorAlert .ua-bell { display:inline-block; animation:urgentBell 1.2s ease infinite; }
+    `;
+    document.head.appendChild(s);
+  }
+
+  overlay.innerHTML = `
+    <div class="ua-card" style="
+      background:var(--surface,#1a1d2e);
+      border:2px solid var(--c3,#ff3d6e);
+      border-radius:20px;
+      padding:2.2rem 2.4rem;
+      max-width:420px;
+      width:90%;
+      text-align:center;
+      position:relative;
+    ">
+      <!-- Close button -->
+      <button onclick="document.getElementById('urgentDoctorAlert').remove()" style="
+        position:absolute; top:.9rem; right:1rem;
+        background:transparent; border:none; font-size:1.2rem;
+        color:var(--tx3,#8b9ab4); cursor:pointer; line-height:1;
+      " title="Dismiss">✕</button>
+
+      <!-- Icon -->
+      <div style="font-size:3rem; margin-bottom:.6rem">
+        <span class="ua-bell">🔔</span>
+      </div>
+
+      <!-- Urgent badge -->
+      <div style="
+        display:inline-block;
+        background:rgba(255,61,110,.15);
+        border:1px solid rgba(255,61,110,.45);
+        color:var(--c3,#ff3d6e);
+        font-family:'JetBrains Mono',monospace;
+        font-size:.7rem;
+        letter-spacing:.12em;
+        text-transform:uppercase;
+        padding:4px 14px;
+        border-radius:99px;
+        margin-bottom:1rem;
+      ">⚠ Urgent Medical Alert</div>
+
+      <!-- Headline -->
+      <div style="
+        font-size:1.3rem;
+        font-weight:700;
+        color:var(--tx,#e8eaf6);
+        margin-bottom:.5rem;
+        line-height:1.3;
+      ">Urgently Visit a Doctor</div>
+
+      <!-- Sub-text -->
+      <div style="
+        font-size:.88rem;
+        color:var(--tx2,#b0b8d8);
+        line-height:1.6;
+        margin-bottom:1.4rem;
+      ">
+        The AI scan has detected a <strong style="color:var(--c3,#ff3d6e)">risk score of ${riskScore}%</strong>
+        for <em>${diagnosis}</em>.<br><br>
+        This result exceeds the critical threshold. Please seek immediate medical attention and consult a specialist as soon as possible.
+      </div>
+
+      <!-- Risk meter -->
+      <div style="margin-bottom:1.5rem">
+        <div style="display:flex;justify-content:space-between;font-size:.72rem;color:var(--tx3,#8b9ab4);font-family:'JetBrains Mono',monospace;margin-bottom:.4rem">
+          <span>Risk Score</span><span style="color:var(--c3,#ff3d6e);font-weight:700">${riskScore}%</span>
+        </div>
+        <div style="height:8px;background:var(--bg4,#252840);border-radius:99px;overflow:hidden">
+          <div style="height:100%;width:0;border-radius:99px;background:linear-gradient(90deg,#ff6b35,var(--c3,#ff3d6e));transition:width 1.1s cubic-bezier(.4,0,.2,1)" id="ua-risk-bar"></div>
+        </div>
+      </div>
+
+      <!-- CTA buttons -->
+      <div style="display:flex;gap:.75rem;justify-content:center;flex-wrap:wrap">
+        <button onclick="document.getElementById('urgentDoctorAlert').remove()" style="
+          padding:.65rem 1.4rem;
+          border-radius:10px;
+          border:1px solid var(--border,rgba(255,255,255,.1));
+          background:transparent;
+          color:var(--tx2,#b0b8d8);
+          font-size:.85rem;
+          cursor:pointer;
+          transition:background .15s;
+        " onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background='transparent'">
+          Dismiss
+        </button>
+        <button onclick="document.getElementById('urgentDoctorAlert').remove();downloadReport?.();" style="
+          padding:.65rem 1.6rem;
+          border-radius:10px;
+          border:none;
+          background:linear-gradient(135deg,#ff3d6e,#ff6b35);
+          color:#fff;
+          font-size:.85rem;
+          font-weight:600;
+          cursor:pointer;
+          box-shadow:0 4px 14px rgba(255,61,110,.35);
+          transition:opacity .15s;
+        " onmouseover="this.style.opacity='.88'" onmouseout="this.style.opacity='1'">
+          📄 Download Report
+        </button>
+      </div>
+
+      <!-- Disclaimer -->
+      <div style="margin-top:1.2rem;font-size:.68rem;color:var(--tx4,#5c6480);font-family:'JetBrains Mono',monospace">
+        This is an AI-assisted result and does not replace professional medical diagnosis.
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  // Close on backdrop click
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+  // Animate the risk bar after mount
+  setTimeout(() => {
+    const bar = document.getElementById('ua-risk-bar');
+    if (bar) bar.style.width = riskScore + '%';
+  }, 80);
 }
 
 // ── Gauge SVG ────────────────────────────────
@@ -1170,10 +1333,10 @@ function updateProbBars(probs, rawProbs) {
       </div>`).join('');
 
   } else {
-    // Fallback: 5-item display array from demo data
-    const labels = ['Tumor (TUM)','Cancer Stroma (STR)','Lymphocytes (LYM)','Mucosa (MUC)','Normal (NORM)'];
-    const colors = ['var(--c3)','#ff6b35','var(--c4)','var(--c1)','var(--c2)'];
-    const arr = Array.isArray(probs) ? probs : [0,0,0,0,0];
+    // Fallback: 8-item display array from demo data
+    const labels = ['Tumor (TUM)','Cancer Stroma (STR)','Lymphocytes (LYM)','Debris (DEB)','Mucosa (MUC)','Smooth Muscle (MUS)','Normal Mucosa (NORM)','Adipose (ADI)'];
+    const colors = ['var(--c3)','#ff6b35','var(--c4)','#9b8fff','var(--c1)','#4bc8eb','var(--c2)','#a8ff78'];
+    const arr = Array.isArray(probs) ? probs : [0,0,0,0,0,0,0,0];
     const total = arr.reduce((a,b) => a+b, 0);
     const norm  = total > 0 ? arr.map(v => Math.round(v / total * 100)) : arr;
 
@@ -1473,6 +1636,72 @@ function toggleHeatmap() {
   if (btn) btn.textContent = heatmapVisible ? '👁 Hide Heatmap' : '👁 Show Heatmap';
   showToast(heatmapVisible ? '🌡 GradCAM overlay enabled' : '🌡 GradCAM overlay hidden', 'info');
 }
+
+// Open GradCAM zoom from canvases (composited) or fallback image
+window.openGradcamZoom = function() {
+  if (activeHeatmapTab !== 'gradcam') {
+    showToast('Switch to the GradCAM tab to use zoom', 'warn');
+    return;
+  }
+
+  const bwCanvas = document.getElementById('bwCanvas');
+  const heatCanvas = document.getElementById('heatmapCanvas');
+  const imgFallback = document.querySelector('#gradcamWrap img');
+  const previewImg = document.querySelector('#uploadPreview img, .preview-thumb img');
+  const serverGradcam = window._gradcamPath;
+
+  if (bwCanvas && heatCanvas) {
+    const W = bwCanvas.width || bwCanvas.clientWidth;
+    const H = bwCanvas.height || bwCanvas.clientHeight;
+    if (!W || !H) {
+      showToast('GradCAM is still loading — try again in a moment', 'warn');
+      return;
+    }
+    try {
+      const tmp = document.createElement('canvas');
+      tmp.width = W;
+      tmp.height = H;
+      const ctx = tmp.getContext('2d');
+      ctx.drawImage(bwCanvas, 0, 0, W, H);
+      if (heatmapVisible) {
+        const op = parseFloat(getComputedStyle(heatCanvas).opacity || '1');
+        ctx.globalAlpha = Number.isFinite(op) ? op : 1;
+        ctx.drawImage(heatCanvas, 0, 0, W, H);
+        ctx.globalAlpha = 1;
+      }
+      const dataUrl = tmp.toDataURL('image/png');
+      openZoomViewer(dataUrl, 'GradCAM — Pathology Scan');
+      return;
+    } catch (err) {
+      console.warn('GradCAM zoom compose failed:', err);
+      // Try base canvas only
+      try {
+        const baseUrl = bwCanvas.toDataURL('image/png');
+        openZoomViewer(baseUrl, 'GradCAM — Base Image');
+        return;
+      } catch (err2) {
+        console.warn('GradCAM base zoom failed:', err2);
+      }
+    }
+  }
+
+  if (imgFallback) {
+    openZoomViewer(imgFallback.src, 'GradCAM — Pathology Scan');
+    return;
+  }
+
+  if (serverGradcam) {
+    openZoomViewer(serverGradcam, 'GradCAM — Pathology Scan');
+    return;
+  }
+
+  if (previewImg) {
+    openZoomViewer(previewImg.src, 'Pathology Scan');
+    return;
+  }
+
+  showToast('Run a scan first to use zoom', 'warn');
+};
 
 // ── Doctor Feedback ───────────────────────────
 let starRating = 0;
@@ -2295,9 +2524,9 @@ function reportCustomHTML() {
 }
 
 
-// ══════════════════════════════════════════════
+// ═══════════
 // RISK ALERTS PANEL
-// ══════════════════════════════════════════════
+// ═══════════
 const RISK_ALERTS = [
   { id:1, patient:'Kiran Desai',   pid:'P-0037', age:67, dx:'Adenocarcinoma',       score:94, status:'critical', action:'Immediate oncology referral', since:'2h ago' },
   { id:2, patient:'Arjun Mehta',   pid:'P-0041', age:58, dx:'High-Grade Dysplasia', score:82, status:'urgent',   action:'Endoscopic resection consult', since:'4h ago' },
@@ -2378,9 +2607,9 @@ window.dismissAlert = function(id, btn) {
 };
 
 
-// ══════════════════════════════════════════════
+// ═════════
 // SETTINGS PANEL
-// ══════════════════════════════════════════════
+// ═════════
 function openSettings() {
   const existing = document.getElementById('settingsModal');
   if (existing) { existing.classList.add('open'); return; }
@@ -2571,9 +2800,9 @@ function applySavedSettings() {
 }
 
 
-// ══════════════════════════════════════════════
+// ══════════
 // PROFILE DROPDOWN (Google-style)
-// ══════════════════════════════════════════════
+// ══════════
 function initProfileDropdown() {
   const avatarBtn = document.querySelector('.avatar-btn');
   if (!avatarBtn) return;
@@ -2901,6 +3130,10 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('themeToggle')?.addEventListener('click', toggleTheme);
   document.getElementById('scanBtn')?.addEventListener('click', runScan);
   document.getElementById('toggleHeatBtn')?.addEventListener('click', toggleHeatmap);
+  document.getElementById('gradcamZoomBtn')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    openGradcamZoom();
+  });
   document.getElementById('downloadReport')?.addEventListener('click', downloadReport);
   document.getElementById('confirmBtn')?.addEventListener('click', () => submitFeedback('confirm'));
   document.getElementById('incorrectBtn')?.addEventListener('click', () => submitFeedback('incorrect'));
@@ -2915,11 +3148,11 @@ document.addEventListener('DOMContentLoaded', () => {
     bd.addEventListener('click', e => { if (e.target === bd) bd.classList.remove('open'); });
   });
 });
-// ═══════════════════════════════════════════════════════════════
+// ═══════════
 // NEW FEATURES — PDF Modal, Batch Upload, Confidence Trend, Chatbot Fix
-// ═══════════════════════════════════════════════════════════════
+// ══════════=
 
-// ── 1. PDF Report Modal ──────────────────────────────────────────
+// ── 1. PDF Report Modal ─
 function openReportModal() {
   const existing = document.getElementById('reportModal');
   if (existing) { existing.classList.add('open'); return; }
@@ -3284,7 +3517,7 @@ function _resetBatchModal() {
 }
 
 
-// ── 3. Confidence Trend Chart ────────────────────────────────────
+// ── 3. Confidence Trend Chart ───────────
 let _trendData = JSON.parse(localStorage.getItem('gs_trend_data') || '[]');
 
 function recordTrendPoint(tier, confidence, predictedClass) {
@@ -3381,7 +3614,7 @@ function clearTrendData() {
 }
 
 
-// ── 4. Improved Chatbot ──────────────────────────────────────────
+// ── 4. Improved Chatbot ───────
 async function sendChatMessageV2() {
   const input = document.getElementById('chatInput');
   const body  = document.getElementById('chatBody');
@@ -3470,7 +3703,7 @@ window.sendChatMessage = sendChatMessageV2;
 
 // ── 5. Wire everything into displayResults (handled in section below) ──
 
-// ── 6. Init on DOM ready ────────────────────────────────────────
+// ── 6. Init on DOM ready ─────────────
 document.addEventListener('DOMContentLoaded', () => {
   // Wire new report button
   document.getElementById('downloadReport')?.addEventListener('click', e => {
@@ -3492,9 +3725,9 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('batchUploadBtn')?.addEventListener('click', openBatchModal);
 });
 
-// ════════════════════════════════════════════════════════════════
+
 // DASHBOARD INTRO ANIMATION
-// ════════════════════════════════════════════════════════════════
+
 function runDashboardIntro() {
   if (!document.getElementById('patientsCount')) return;
   if (sessionStorage.getItem('gs_intro_done')) return;
@@ -3885,8 +4118,7 @@ function openClinicalModal() {
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;margin-top:.3rem">
           ${['I','II','III','IV'].map(s => `
             <button type="button" class="stage-pill ${d.stage===s?'active':''}" data-stage="${s}"
-              onclick="document.querySelectorAll('.stage-pill').forEach(b=>b.classList.remove('active'));this.classList.add('active')"
-              style="padding:.5rem;border-radius:8px;border:1px solid ${d.stage===s?'var(--c1)':'var(--border)'};background:${d.stage===s?'rgba(0,212,255,.12)':'var(--bg3)'};color:${d.stage===s?'var(--c1)':'var(--tx2)'};cursor:pointer;font-weight:${d.stage===s?'700':'400'};transition:all .15s;font-family:'JetBrains Mono',monospace;font-size:.85rem">
+              style="padding:.5rem;border-radius:8px;cursor:pointer;transition:all .15s;font-family:'JetBrains Mono',monospace;font-size:.85rem">
               Stage ${s}
             </button>`).join('')}
         </div>
@@ -3929,8 +4161,25 @@ function openClinicalModal() {
   ['m_age','m_gender','m_gene','m_grisk'].forEach(id => {
     document.getElementById(id)?.addEventListener('input', updateClinPreview);
   });
-  document.querySelectorAll('.stage-pill').forEach(b => b.addEventListener('click', updateClinPreview));
+  document.querySelectorAll('.stage-pill').forEach(b => {
+    b.addEventListener('click', () => {
+      applyStagePillStyles(b.dataset.stage);
+      updateClinPreview();
+    });
+  });
+  applyStagePillStyles(d.stage || 'I');
   updateClinPreview();
+}
+
+function applyStagePillStyles(activeStage) {
+  document.querySelectorAll('.stage-pill').forEach(btn => {
+    const isActive = btn.dataset.stage === activeStage;
+    btn.classList.toggle('active', isActive);
+    btn.style.border = `1px solid ${isActive ? 'var(--c1)' : 'var(--border)'}`;
+    btn.style.background = isActive ? 'rgba(0,212,255,.12)' : 'var(--bg3)';
+    btn.style.color = isActive ? 'var(--c1)' : 'var(--tx2)';
+    btn.style.fontWeight = isActive ? '700' : '400';
+  });
 }
 
 function updateClinPreview() {
