@@ -143,19 +143,7 @@
           </table>
         </div>
 
-        <!-- Pagination -->
-        <div class="flex items-center justify-between" style="padding-top:1rem;border-top:1px solid var(--border);margin-top:.5rem">
-          <span style="font-size:.8rem;color:var(--tx3);font-family:'JetBrains Mono',monospace">
-            Showing 1–6 of 248 patients
-          </span>
-          <div class="flex gap-1">
-            <button class="btn btn-ghost btn-sm" onclick="showToast('← Previous page','info')">← Prev</button>
-            <button class="btn btn-primary btn-sm" style="min-width:36px;justify-content:center">1</button>
-            <button class="btn btn-ghost btn-sm" style="min-width:36px;justify-content:center">2</button>
-            <button class="btn btn-ghost btn-sm" style="min-width:36px;justify-content:center">3</button>
-            <button class="btn btn-ghost btn-sm" onclick="showToast('→ Next page','info')">Next →</button>
-          </div>
-        </div>
+        <!-- Pagination injected by renderPaginationBar() in app.js -->
       </div>
 
     </main>
@@ -277,5 +265,6 @@
     }
   }
 </script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 </body>
 </html>
