@@ -1,3 +1,139 @@
+//  SUPABASE CLIENT
+//  Replace the two values below with your project credentials.
+//  Dashboard → Settings → API → Project URL & anon/public key
+
+const SUPABASE_URL  = 'create your url in supabase dashboard and paste here';
+const SUPABASE_ANON = 'create your anon key in supabase dashboard and paste here';
+
+// Lazy-init: the client is created once on first use so the
+// script works even if the Supabase CDN hasn't loaded yet.
+let _supabase = null;
+function getSupabase() {
+  if (_supabase) return _supabase;
+  if (typeof window.supabase === 'undefined' || typeof window.supabase.createClient === 'undefined') {
+    console.error('Supabase SDK not loaded. Add this <script> tag before app.js:\n<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>');
+    return null;
+  }
+  _supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+  return _supabase;
+}
+
+// ── Supabase: load all patients ───────────────
+async function sbLoadPatients() {
+  const sb = getSupabase();
+  if (!sb) return null;
+  const { data, error } = await sb
+    .from('patients')
+    .select('*')
+    .order('updated_at', { ascending: false });
+  if (error) { console.error('sbLoadPatients:', error.message); return null; }
+  return data;
+}
+
+// ── Supabase: insert one patient ──────────────
+async function sbInsertPatient(patient) {
+  const sb = getSupabase();
+  if (!sb) return null;
+  const { data, error } = await sb
+    .from('patients')
+    .insert([patient])
+    .select()
+    .single();
+  if (error) { console.error('sbInsertPatient:', error.message); return null; }
+  return data;
+}
+
+// ── Supabase: update one patient by id ────────
+async function sbUpdatePatient(id, updates) {
+  const sb = getSupabase();
+  if (!sb) return null;
+  const { data, error } = await sb
+    .from('patients')
+    .update(updates)
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) { console.error('sbUpdatePatient:', error.message); return null; }
+  return data;
+}
+
+// ── Supabase: delete one patient by id ────────
+async function sbDeletePatient(id) {
+  const sb = getSupabase();
+  if (!sb) return null;
+  const { error } = await sb
+    .from('patients')
+    .delete()
+    .eq('id', id);
+  if (error) { console.error('sbDeletePatient:', error.message); return false; }
+  return true;
+}
+
+// ── Supabase: generate next patient id ────────
+//  Reads highest existing P-XXXX and increments by 1.
+async function sbNextPatientId() {
+  const sb = getSupabase();
+  if (!sb) return 'P-' + String(Date.now()).slice(-4);
+  const { data } = await sb
+    .from('patients')
+    .select('id')
+    .order('id', { ascending: false })
+    .limit(1);
+  if (!data || !data.length) return 'P-0001';
+  const last = parseInt((data[0].id || '').replace('P-', '')) || 0;
+  return 'P-' + String(last + 1).padStart(4, '0');
+}
+
+// ── Supabase: save a scan result ─────────────
+async function sbInsertScan(scanPayload) {
+  const sb = getSupabase();
+  if (!sb) return null;
+  const { data, error } = await sb
+    .from('scans')
+    .insert([scanPayload])
+    .select()
+    .single();
+  if (error) { console.error('sbInsertScan:', error.message); return null; }
+  return data;
+}
+
+// ── Supabase: save 8-class probabilities ─────
+async function sbInsertProbabilities(scanId, rawProbs) {
+  const sb = getSupabase();
+  if (!sb || !scanId || !rawProbs) return null;
+  const row = {
+    scan_id: scanId,
+    tum: rawProbs.TUM || rawProbs.tum || 0,
+    str: rawProbs.STR || rawProbs.str || 0,
+    lym: rawProbs.LYM || rawProbs.lym || 0,
+    deb: rawProbs.DEB || rawProbs.deb || 0,
+    muc: rawProbs.MUC || rawProbs.muc || 0,
+    mus: rawProbs.MUS || rawProbs.mus || 0,
+    norm: rawProbs.NORM || rawProbs.norm || 0,
+    adi: rawProbs.ADI || rawProbs.adi || 0,
+  };
+  const { data, error } = await sb.from('scan_probabilities').insert([row]).select().single();
+  if (error) { console.error('sbInsertProbabilities:', error.message); return null; }
+  return data;
+}
+
+// ── Supabase: save doctor feedback ───────────
+async function sbInsertFeedback(scanId, patientId, verdict, rating, notes) {
+  const sb = getSupabase();
+  if (!sb) return null;
+  const row = {
+    scan_id:     scanId,
+    patient_id:  patientId  || null,
+    doctor_name: localStorage.getItem('gs_doctor_name') || 'Dr. Admin',
+    verdict,
+    rating,
+    notes: notes || null,
+  };
+  const { data, error } = await sb.from('feedback').insert([row]).select().single();
+  if (error) { console.error('sbInsertFeedback:', error.message); return null; }
+  return data;
+}
+
 // ── Theme ────────────────────────────────────
 const THEME_KEY = 'gs_theme';
 
@@ -114,44 +250,39 @@ function animateRiskBars() {
 
 // ── Load Dashboard Stats ─────────────────────
 async function loadDashboardStats() {
-  try {
-    const result = await atlasRequest("find", { filter: {}, limit: 1000 });
-    const patients = result.documents || [];
-    const data = {
-      total_patients: patients.length,
-      total_scans: patients.length * 4,
-      high_risk: patients.filter(p => (p.risk || '').toLowerCase() === 'high').length,
-      model_accuracy: 70,
-    };
-    const p = document.getElementById('patientsCount');
-    const s = document.getElementById('scansCount');
-    const r = document.getElementById('riskCount');
-    const a = document.getElementById('accuracyValue');
-    if (p) animateCounter(p, data.total_patients);
-    if (s) animateCounter(s, data.total_scans);
-    if (r) animateCounter(r, data.high_risk);
-    if (a && data.model_accuracy !== undefined) {
-      const acc = data.model_accuracy <= 1 ? (data.model_accuracy * 100) : data.model_accuracy;
-      animateCounter(a, parseFloat(acc.toFixed(1)), '%');
-    }
-    // Update sidebar badge
-    updatePatientBadges(data.total_patients, data.high_risk);
-    loadRecentPatients();
-  } catch (e) {
-    // Demo mode: use DEMO_PATIENTS length for patient counts
-    const total = DEMO_PATIENTS.length;
-    const highRisk = DEMO_PATIENTS.filter(p => p.risk === 'high').length;
-    const p = document.getElementById('patientsCount');
-    const r = document.getElementById('riskCount');
-    const s = document.getElementById('scansCount');
-    const a = document.getElementById('accuracyValue');
-    if (p) animateCounter(p, total);
-    if (r) animateCounter(r, highRisk);
-    if (s) animateCounter(s, total * 4); // rough estimate
-    if (a) { a.textContent = '94.2%'; }
-    updatePatientBadges(total, highRisk);
-    loadRecentPatients();
+  let patients = null;
+
+  // ── 1. Supabase (primary) ─────────────────────
+  patients = await sbLoadPatients();
+
+  // ── 2. Atlas fallback ─────────────────────────
+  if (!patients || !patients.length) {
+    try {
+      const result = await atlasRequest("find", { filter: {}, limit: 1000 });
+      patients = result.documents || [];
+    } catch (e) { patients = null; }
   }
+
+  // ── 3. Demo fallback ──────────────────────────
+  if (!patients || !patients.length) {
+    patients = DEMO_PATIENTS;
+  }
+
+  const total    = patients.length;
+  const highRisk = patients.filter(p => (p.risk || '').toLowerCase() === 'high').length;
+
+  const pEl = document.getElementById('patientsCount');
+  const sEl = document.getElementById('scansCount');
+  const rEl = document.getElementById('riskCount');
+  const aEl = document.getElementById('accuracyValue');
+
+  if (pEl) animateCounter(pEl, total);
+  if (sEl) animateCounter(sEl, total * 4);
+  if (rEl) animateCounter(rEl, highRisk);
+  if (aEl) { aEl.textContent = '94.2%'; }
+
+  updatePatientBadges(total, highRisk);
+  loadRecentPatients();
 }
 
 function updatePatientBadges(total, highRisk) {
@@ -213,28 +344,32 @@ function normPatient(p, i) {
 
 let _allPatients = []; // live cache from server
 
+// ── Pagination state ─────────────────────────
+const PATIENTS_PER_PAGE = 10;
+let _currentPage = 1;
+let _isDemo      = false;
+
 async function loadRecentPatients(forcedData) {
   const tbody = document.getElementById('patientsTable');
   if (!tbody) return;
 
-  // Show skeleton
   tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--tx3)">
     <span class="mono" style="font-size:.8rem">⏳ Loading from database…</span>
   </td></tr>`;
 
   let data = forcedData;
+  _isDemo = false;
 
-  if (!data) {
+  // ── 1. Supabase (primary) ─────────────────────
+  if (!data) data = await sbLoadPatients();
+
+  // ── 2. Atlas / Flask fallback ─────────────────
+  if (!data || !data.length) {
     try {
-  const result = await atlasRequest("find", { filter: {}, limit: 100 });
-  data = result.documents || [];
-} catch (e) {
-  console.warn('Atlas fetch failed:', e.message);
-  data = null;
-}
+      const result = await atlasRequest('find', { filter: {}, limit: 1000 });
+      data = result.documents || [];
+    } catch (e) { data = null; }
   }
-
-  // If backend returned nothing, try /get_patients as alternate endpoint
   if (!data || !data.length) {
     try {
       const res2 = await fetch('/get_patients');
@@ -245,62 +380,209 @@ async function loadRecentPatients(forcedData) {
     } catch {}
   }
 
-  // Final fallback — but LABEL it as demo data
-  const isDemo = !data || !data.length;
-  if (isDemo) data = DEMO_PATIENTS;
+  // ── 3. Demo fallback ──────────────────────────
+  if (!data || !data.length) { _isDemo = true; data = DEMO_PATIENTS; }
 
   _allPatients = data;
+  _currentPage = 1;
 
-  if (!data.length) {
-    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--tx3);padding:2rem">
-      <div style="font-size:1.5rem;margin-bottom:.5rem">📭</div>
-      <div style="font-family:'JetBrains Mono',monospace;font-size:.8rem">No patients registered yet</div>
-      <div style="font-size:.75rem;margin-top:.3rem">Add a patient to get started</div>
-    </td></tr>`;
-    return;
-  }
+  renderPatientPage();
+  refreshPatientStats();
+  setTimeout(() => { initPatientSearch?.(); }, 80);
+}
 
-  // Determine column count based on page (dashboard has 7, patients page has 8)
+// ── Recount stats from live _allPatients and update the four cards ────────────
+function refreshPatientStats() {
+  const pts = _allPatients || [];
+  const total = pts.length;
+  const high  = pts.filter(p => (p.risk || '').toLowerCase() === 'high').length;
+  const mid   = pts.filter(p => ['mid','medium'].includes((p.risk || '').toLowerCase())).length;
+  const low   = pts.filter(p => (p.risk || '').toLowerCase() === 'low').length;
+
+  const tEl = document.getElementById('ptStatTotal');
+  const hEl = document.getElementById('ptStatHigh');
+  const mEl = document.getElementById('ptStatMid');
+  const lEl = document.getElementById('ptStatLow');
+  if (tEl) animateCounter(tEl, total);
+  if (hEl) animateCounter(hEl, high);
+  if (mEl) animateCounter(mEl, mid);
+  if (lEl) animateCounter(lEl, low);
+
+  // Keep topbar "Active" chip in sync
+  const chip = document.querySelector('.status-chip');
+  if (chip) chip.innerHTML = `<div class="status-dot"></div> ${total} Active`;
+
+  // Keep patientsCount (dashboard) in sync
+  const cntEl = document.getElementById('patientsCount');
+  if (cntEl && cntEl.textContent !== String(total)) animateCounter(cntEl, total);
+}
+
+// ── Filter + search helper ────────────────────────────────────────────────────
+function _getFilteredPatients() {
+  const risk  = (window._activeFilter || 'all').toLowerCase();
+  const query = (window._patientSearchQuery || '').toLowerCase().trim();
+
+  return _allPatients.filter((raw, i) => {
+    const p = normPatient(raw, i);
+
+    let riskMatch = true;
+    if (risk === 'high')              riskMatch = p.risk === 'high';
+    else if (risk === 'mid' || risk === 'medium') riskMatch = p.risk === 'mid';
+    else if (risk === 'low')          riskMatch = p.risk === 'low';
+    else if (risk === 'new') {
+      const today = new Date().toISOString().slice(0, 10);
+      riskMatch = (p.date || '').startsWith(today);
+    }
+
+    const searchMatch = !query ||
+      [p.id, p.name, p.last, p.genderStr, String(p.age)].join(' ').toLowerCase().includes(query);
+
+    return riskMatch && searchMatch;
+  });
+}
+
+// ── Render one page of the filtered list ─────────────────────────────────────
+function renderPatientPage() {
+  const tbody = document.getElementById('patientsTable');
+  if (!tbody) return;
+
+  const filtered    = _getFilteredPatients();
+  const totalPages  = Math.max(1, Math.ceil(filtered.length / PATIENTS_PER_PAGE));
+  _currentPage      = Math.min(_currentPage, totalPages);
+  const start       = (_currentPage - 1) * PATIENTS_PER_PAGE;
+  const pageRows    = filtered.slice(start, start + PATIENTS_PER_PAGE);
   const isDashboard = !!document.getElementById('patientsCount');
 
-  tbody.innerHTML = data.map((raw, i) => {
-    const p = normPatient(raw, i);
-    const extraCol = isDashboard ? '' : `<td style="font-family:'JetBrains Mono',monospace;font-size:.72rem;color:var(--tx3)">${p.date || '—'}</td>`;
-    return `<tr onclick="viewPatient('${p.id}')">
-      <td class="mono" style="color:var(--c1);font-size:.8rem">${p.id}</td>
-      <td><div class="pt-cell">${ptAvatar(p.name, i)}<span>${p.name}</span></div></td>
-      <td>${p.age}</td>
-      <td>${p.genderStr}</td>
-      <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${p.last}">${p.last}</td>
-      ${extraCol}
-      <td>${riskBadge(p.risk)}</td>
-      <td><div class="table-actions">
-        <button class="btn btn-icon btn-ghost btn-sm" onclick="event.stopPropagation();editPatient('${p.id}')" title="Edit">✏️</button>
-        <button class="btn btn-icon btn-danger btn-sm" onclick="event.stopPropagation();deletePatient(this,'${p.id}')" title="Delete">🗑</button>
-      </div></td>
-    </tr>`;
-  }).join('');
+  if (!pageRows.length) {
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--tx3);padding:2rem">
+      <div style="font-size:1.5rem;margin-bottom:.5rem">📭</div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:.8rem">
+        ${filtered.length === 0 && _allPatients.length > 0
+          ? 'No patients match this filter'
+          : 'No patients registered yet'}
+      </div>
+    </td></tr>`;
+  } else {
+    tbody.innerHTML = pageRows.map((raw, i) => {
+      const gi = start + i;
+      const p  = normPatient(raw, gi);
+      const extraCol = isDashboard ? '' :
+        `<td style="font-family:'JetBrains Mono',monospace;font-size:.72rem;color:var(--tx3)">${p.date || '—'}</td>`;
+      return `<tr onclick="viewPatient('${p.id}')">
+        <td class="mono" style="color:var(--c1);font-size:.8rem">${p.id}</td>
+        <td><div class="pt-cell">${ptAvatar(p.name, gi)}<span>${p.name}</span></div></td>
+        <td>${p.age}</td>
+        <td>${p.genderStr}</td>
+        <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${p.last}">${p.last}</td>
+        ${extraCol}
+        <td>${riskBadge(p.risk)}</td>
+        <td><div class="table-actions">
+          <button class="btn btn-icon btn-ghost btn-sm" onclick="event.stopPropagation();editPatient('${p.id}')" title="Edit">✏️</button>
+          <button class="btn btn-icon btn-danger btn-sm" onclick="event.stopPropagation();deletePatient(this,'${p.id}')" title="Delete">🗑</button>
+        </div></td>
+      </tr>`;
+    }).join('');
+  }
 
-  // Show demo banner if using fallback
-  if (isDemo) {
+  if (_isDemo) {
     const banner = document.createElement('tr');
     banner.id = 'demoBanner';
     banner.innerHTML = `<td colspan="8" style="background:rgba(255,179,64,.08);border:none;padding:.4rem 1rem;font-size:.72rem;color:var(--c4);font-family:'JetBrains Mono',monospace;text-align:center">
-      ⚠️ Showing demo data — connect Flask /patients endpoint to show real database records
+      ⚠️ Showing demo data — Supabase not configured
     </td>`;
     tbody.insertBefore(banner, tbody.firstChild);
+  } else {
+    document.getElementById('demoBanner')?.remove();
   }
 
-  // Re-init search after loading
-  setTimeout(() => { initPatientSearch?.(); applyPatientFilters?.(); }, 100);
+  // Update inline count label
+  const countEl = document.getElementById('patientFilterCount');
+  if (countEl) countEl.textContent = `Showing ${filtered.length} patient${filtered.length !== 1 ? 's' : ''}`;
+
+  renderPaginationBar(totalPages, filtered.length, start);
 }
+
+// ── Build the pagination bar ──────────────────────────────────────────────────
+function renderPaginationBar(totalPages, totalCount, start) {
+  let bar = document.getElementById('_ptPagBar');
+  if (!bar) {
+    const card = document.getElementById('patientsTable')?.closest('.card');
+    bar = document.createElement('div');
+    bar.id = '_ptPagBar';
+    bar.style.cssText =
+      'display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;' +
+      'gap:.6rem;padding:.85rem 1rem;border-top:1px solid var(--border,rgba(255,255,255,.08));margin-top:.25rem';
+    if (card) card.appendChild(bar);
+    else document.getElementById('patientsTable')?.parentNode?.appendChild(bar);
+  }
+
+  if (totalPages <= 1 && totalCount <= PATIENTS_PER_PAGE) { bar.innerHTML = ''; return; }
+
+  const end  = Math.min(_currentPage * PATIENTS_PER_PAGE, totalCount);
+  const s    = start + 1;
+
+  // Smart page window: always show first, last, and ±2 around current
+  const range = [];
+  for (let i = 1; i <= totalPages; i++) {
+    if (i === 1 || i === totalPages || (i >= _currentPage - 2 && i <= _currentPage + 2)) range.push(i);
+  }
+  const pages = [];
+  let prev = 0;
+  for (const pg of range) {
+    if (pg - prev > 1) pages.push('...');
+    pages.push(pg);
+    prev = pg;
+  }
+
+  const base   = "font-family:'JetBrains Mono',monospace;font-size:.75rem;min-width:32px;height:32px;border-radius:7px;border:1px solid var(--border,rgba(255,255,255,.1));background:var(--bg3,#1a1f3a);color:var(--tx2);cursor:pointer;padding:0 8px;transition:all .15s;display:inline-flex;align-items:center;justify-content:center;";
+  const active = 'background:var(--c1,#00d4ff);color:#000;border-color:var(--c1,#00d4ff);font-weight:700;';
+  const dis    = 'opacity:.35;cursor:not-allowed;pointer-events:none;';
+
+  bar.innerHTML =
+    `<span style="font-family:'JetBrains Mono',monospace;font-size:.72rem;color:var(--tx3)">
+       ${s}–${end} of ${totalCount} patient${totalCount !== 1 ? 's' : ''}
+     </span>
+     <div style="display:flex;gap:.3rem;align-items:center;flex-wrap:wrap">
+       <button style="${base}${_currentPage === 1 ? dis : ''}"
+         onclick="goToPatientPage(${_currentPage - 1})"
+         ${_currentPage === 1 ? 'disabled' : ''}>‹ Prev</button>
+       ${pages.map(pg =>
+           pg === '...'
+             ? `<span style="color:var(--tx3);font-size:.76rem;padding:0 4px">…</span>`
+             : `<button style="${base}${pg === _currentPage ? active : ''}"
+                  onclick="goToPatientPage(${pg})">${pg}</button>`
+         ).join('')}
+       <button style="${base}${_currentPage === totalPages ? dis : ''}"
+         onclick="goToPatientPage(${_currentPage + 1})"
+         ${_currentPage === totalPages ? 'disabled' : ''}>Next ›</button>
+     </div>`;
+}
+
+// ── Navigate to a page ────────────────────────────────────────────────────────
+window.goToPatientPage = function(page) {
+  const total = Math.max(1, Math.ceil(_getFilteredPatients().length / PATIENTS_PER_PAGE));
+  if (page < 1 || page > total) return;
+  _currentPage = page;
+  renderPatientPage();
+  document.getElementById('patientsTable')
+    ?.closest('.card, section')
+    ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
 
 function viewPatient(id) {
   showToast(`📋 Viewing patient ${id}`, 'info');
 }
 function editPatient(id) {
-  // Find patient data
-  const pt = DEMO_PATIENTS.find(p => p.id === id || p.name === id) || { id, name: id, age: '', gender: 'Male', last: '' };
+  // Look up from live Supabase cache first, then demo fallback
+  const raw = _allPatients.find(p => p.id === id) || DEMO_PATIENTS.find(p => p.id === id) || { id, name: id, age: '', gender: 'Male', last: '' };
+  const pt = {
+    id:     raw.id,
+    name:   raw.name || id,
+    age:    raw.age  || '',
+    gender: raw.gender || 'Male',
+    last:   raw.last_diagnosis || raw.last || raw.condition || '',
+    risk:   raw.risk || 'low',
+  };
   document.getElementById('editPatientModal')?.remove();
   const modal = document.createElement('div');
   modal.id = 'editPatientModal';
@@ -354,17 +636,42 @@ function editPatient(id) {
   modal.addEventListener('click', e => { if (e.target === modal) modal.classList.remove('open'); });
 }
 
-window.saveEditPatient = function(id) {
+window.saveEditPatient = async function(id) {
   const name   = document.getElementById('editNameInput')?.value.trim();
   const age    = document.getElementById('editAgeInput')?.value;
   const gender = document.getElementById('editGenderInput')?.value;
   const cond   = document.getElementById('editCondInput')?.value.trim();
   const risk   = document.getElementById('editRiskInput')?.value;
   if (!name || !age) { showToast('Name and age are required', 'warn'); return; }
+
+  const updates = {
+    name,
+    age:            parseInt(age),
+    gender,
+    last_diagnosis: cond || null,
+    risk,
+  };
+
+  // ── 1. Supabase update (primary) ─────────────
+  const updated = await sbUpdatePatient(id, updates);
+
+  if (updated) {
+    showToast(`✅ ${name} updated in Supabase`, 'ok');
+  } else {
+    // ── 2. Atlas fallback ─────────────────────────
+    atlasRequest('updateOne', {
+      filter: { id },
+      update: { $set: { name, age: parseInt(age), gender, last: cond, risk } }
+    }).catch(() => {});
+    showToast('✅ Patient ' + name + ' updated', 'ok');
+  }
+
+  // Update local DEMO_PATIENTS cache too
   const pt = DEMO_PATIENTS.find(p => p.id === id || p.name === id);
   if (pt) { pt.name = name; pt.age = parseInt(age); pt.gender = gender; pt.last = cond; pt.risk = risk; }
-  const rows = document.querySelectorAll('#patientsTable tr');
-  rows.forEach(row => {
+
+  // Patch the table row in-place without a full reload
+  document.querySelectorAll('#patientsTable tr').forEach(row => {
     const idCell = row.querySelector('td:first-child');
     if (idCell && idCell.textContent.trim() === id) {
       const cells = row.querySelectorAll('td');
@@ -377,12 +684,8 @@ window.saveEditPatient = function(id) {
       setTimeout(() => { row.style.transition = 'background .8s'; row.style.background = ''; }, 1200);
     }
   });
-  atlasRequest("updateOne", {
-  filter: { id },
-  update: { $set: { name, age: parseInt(age), gender, last: cond, risk } }
-}).catch(() => {});
+
   document.getElementById('editPatientModal').classList.remove('open');
-  showToast('✅ Patient ' + name + ' updated', 'ok');
 };
 async function deletePatient(btn, id) {
   const row = btn.closest('tr');
@@ -390,14 +693,25 @@ async function deletePatient(btn, id) {
   row.style.opacity = '0';
   row.style.transform = 'translateX(20px)';
   setTimeout(() => row.remove(), 300);
-  try {
-    const result = await atlasRequest("deleteOne", { filter: { id } });
-    const res = { ok: result.deletedCount > 0 };
-    if (res.ok) showToast('🗑 Patient deleted from database', 'info');
-    else showToast('🗑 Patient removed (demo)', 'info');
-    const cntEl = document.getElementById('patientsCount');
-    if (cntEl) animateCounter(cntEl, Math.max(0, parseInt(cntEl.textContent||'0') - 1));
-  } catch { showToast('🗑 Patient removed (demo mode)', 'info'); }
+
+  // ── 1. Supabase delete (primary) ─────────────
+  const ok = await sbDeletePatient(id);
+
+  if (ok) {
+    showToast('🗑 Patient deleted from Supabase', 'info');
+  } else {
+    // ── 2. Atlas fallback ─────────────────────────
+    try {
+      const result = await atlasRequest('deleteOne', { filter: { id } });
+      if (result.deletedCount > 0) showToast('🗑 Patient deleted from database', 'info');
+      else showToast('🗑 Patient removed (demo)', 'info');
+    } catch { showToast('🗑 Patient removed (demo mode)', 'info'); }
+  }
+
+  // Remove from cache, re-render, refresh stats
+  _allPatients = _allPatients.filter(p => p.id !== id);
+  renderPatientPage();
+  refreshPatientStats();
 }
 
 // ── Add Patient ──────────────────────────────
@@ -411,56 +725,163 @@ function closeModal(id) {
 }
 
 async function submitPatient() {
-  const name = document.getElementById('nameInput')?.value?.trim();
-  const age  = document.getElementById('ageInput')?.value;
+  const name   = document.getElementById('nameInput')?.value?.trim();
+  const age    = document.getElementById('ageInput')?.value;
   const gender = document.getElementById('genderInput')?.value;
-  const cond = document.getElementById('condInput')?.value?.trim();
+  const cond   = document.getElementById('condInput')?.value?.trim();
 
   if (!name || !age) { showToast('Name and age are required', 'warn'); return; }
 
   const btn = document.getElementById('addPatientBtn');
-  if (btn) { btn.classList.add('btn-loading'); btn.innerHTML = '<span class="btn-spinner"></span> Saving...'; }
+  if (btn) { btn.classList.add('btn-loading'); btn.innerHTML = '<span class="btn-spinner"></span> Registering...'; }
 
-  let savedPatient = null;
+  const newId = await sbNextPatientId();
 
-  try {
-    const res = await fetch('/add_patient', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({
-        name,
-        age:       parseInt(age),
-        gender,
-        condition: cond,
-        risk:      'low',
-      }),
-    });
+  const patientRow = {
+    id:             newId,
+    name,
+    age:            parseInt(age),
+    gender,
+    last_diagnosis: cond || null,
+    risk:           'low',
+    risk_score:     null,
+    tier:           null,
+    last_scan:      new Date().toISOString().slice(0, 10),
+  };
 
-    if (!res.ok) {
-      const err = await res.json().catch(()=>({}));
-      throw new Error(err.error || `HTTP ${res.status}`);
+  const saved = await sbInsertPatient(patientRow);
+  let registerSuccess = !!saved;
+
+  if (!saved) {
+    try {
+      const res = await fetch('/add_patient', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ name, age: parseInt(age), gender, condition: cond, risk: 'low' }),
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      registerSuccess = true;
+    } catch (e) {
+      console.warn('add_patient error:', e.message);
     }
-
-    const data = await res.json();
-    savedPatient = data.patient;
-    showToast(`✅ ${name} saved to database`, 'ok');
-
-  } catch (e) {
-    console.warn('add_patient error:', e.message);
-    showToast(`✅ ${name} added (demo mode — DB not connected)`, 'info');
   }
 
-  // Reload patient table from DB (or local cache if offline)
-  closeModal('patientModal');
   if (btn) { btn.classList.remove('btn-loading'); btn.innerHTML = '+ Add Patient'; }
-  ['nameInput','ageInput','condInput'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  ['nameInput', 'ageInput', 'condInput'].forEach(fid => {
+    const el = document.getElementById(fid);
+    if (el) el.value = '';
+  });
 
-  // Refresh the full table from backend
-  await loadRecentPatients(null);
+  closeModal('patientModal');
 
-  // Increment counter
-  const cntEl = document.getElementById('patientsCount');
-  if (cntEl) animateCounter(cntEl, parseInt(cntEl.textContent || '0') + 1);
+  _showRegistrationCard({ id: newId, name, age, gender, cond, success: registerSuccess });
+
+  await loadRecentPatients(null);  // also calls refreshPatientStats() internally
+}
+
+function _showRegistrationCard({ id, name, age, gender, cond, success }) {
+  document.getElementById('_regCard')?.remove();
+
+  const genderIcon = gender === 'Male' ? '\u2642' : gender === 'Female' ? '\u2640' : '\u26a7';
+  const initials   = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  const avatarCol  = avatarColors[Math.floor(Math.random() * avatarColors.length)];
+
+  if (!document.getElementById('_rcCSS')) {
+    const s = document.createElement('style');
+    s.id = '_rcCSS';
+    s.textContent = `
+      @keyframes _rcFadeIn  { from{opacity:0} to{opacity:1} }
+      @keyframes _rcSlideUp { from{opacity:0;transform:translateY(24px) scale(.97)} to{opacity:1;transform:translateY(0) scale(1)} }
+      @keyframes _rcPulse   { 0%,100%{box-shadow:0 0 0 0 rgba(0,255,159,.35)} 60%{box-shadow:0 0 0 14px rgba(0,255,159,0)} }
+    `;
+    document.head.appendChild(s);
+  }
+
+  const overlay = document.createElement('div');
+  overlay.id = '_regCard';
+  overlay.style.cssText = `
+    position:fixed;inset:0;z-index:9000;
+    background:rgba(0,0,0,.55);
+    display:flex;align-items:center;justify-content:center;
+    animation:_rcFadeIn .2s ease;
+  `;
+
+  const borderCol = success ? 'rgba(0,255,159,.35)' : 'rgba(255,179,64,.35)';
+  const accentCol = success ? 'var(--c2,#00ff9f)' : 'var(--c4,#ffb340)';
+  const dbLabel   = success ? '\uD83D\uDFE2 Saved to Supabase database' : '\uD83D\uDFE1 Saved locally (DB offline)';
+  const pillBg    = success ? 'rgba(0,255,159,.1)' : 'rgba(255,179,64,.1)';
+  const pillBd    = success ? 'rgba(0,255,159,.3)' : 'rgba(255,179,64,.3)';
+  const dateStr   = new Date().toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' });
+
+  overlay.innerHTML =
+    '<div style="background:var(--bg2,#13162b);border:1.5px solid ' + borderCol + ';border-radius:20px;' +
+    'padding:2rem 2.2rem 1.8rem;max-width:400px;width:92%;text-align:center;' +
+    'animation:_rcSlideUp .3s cubic-bezier(.34,1.56,.64,1);position:relative;">' +
+
+      '<button onclick="document.getElementById(\'_regCard\').remove()" ' +
+        'style="position:absolute;top:.9rem;right:1rem;background:transparent;border:none;' +
+               'font-size:1.1rem;color:var(--tx3);cursor:pointer">\u2715</button>' +
+
+      '<div style="font-size:2.8rem;margin-bottom:.5rem;animation:_rcPulse 2s ease infinite">' +
+        (success ? '\u2705' : '\u26A0\uFE0F') +
+      '</div>' +
+
+      '<div style="font-family:\'JetBrains Mono\',monospace;font-size:.68rem;letter-spacing:.12em;' +
+                  'text-transform:uppercase;color:' + accentCol + ';margin-bottom:.85rem">' +
+        (success ? 'Patient registered successfully' : 'Saved in demo mode') +
+      '</div>' +
+
+      '<div style="background:var(--bg3,#1a1f3a);border:1px solid var(--border,rgba(255,255,255,.08));' +
+                  'border-radius:14px;padding:1.2rem 1.4rem;margin-bottom:1.2rem;text-align:left">' +
+
+        '<div style="display:flex;align-items:center;gap:.9rem;margin-bottom:1rem">' +
+          '<div style="width:46px;height:46px;border-radius:50%;background:' + avatarCol + ';' +
+                      'display:flex;align-items:center;justify-content:center;' +
+                      'font-weight:700;font-size:1rem;color:#fff;flex-shrink:0">' + initials + '</div>' +
+          '<div>' +
+            '<div style="font-weight:700;font-size:1rem;color:var(--tx,#e8eaf6)">' + name + '</div>' +
+            '<div style="font-family:\'JetBrains Mono\',monospace;font-size:.7rem;color:var(--c1,#00d4ff);margin-top:2px">' + id + '</div>' +
+          '</div>' +
+        '</div>' +
+
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:.55rem .8rem;font-size:.8rem">' +
+          '<div><div style="color:var(--tx3);font-size:.68rem;margin-bottom:2px">Age</div>' +
+               '<div style="color:var(--tx)">' + age + ' yrs</div></div>' +
+          '<div><div style="color:var(--tx3);font-size:.68rem;margin-bottom:2px">Gender</div>' +
+               '<div style="color:var(--tx)">' + genderIcon + ' ' + gender + '</div></div>' +
+          '<div style="grid-column:1/-1"><div style="color:var(--tx3);font-size:.68rem;margin-bottom:2px">Diagnosis / condition</div>' +
+               '<div style="color:var(--tx)">' + (cond || '\u2014') + '</div></div>' +
+          '<div><div style="color:var(--tx3);font-size:.68rem;margin-bottom:2px">Risk</div>' +
+               '<div><span class="badge badge-green">\u25CF Low</span></div></div>' +
+          '<div><div style="color:var(--tx3);font-size:.68rem;margin-bottom:2px">Registered</div>' +
+               '<div style="color:var(--tx);font-family:\'JetBrains Mono\',monospace;font-size:.72rem">' + dateStr + '</div></div>' +
+        '</div>' +
+      '</div>' +
+
+      '<div style="font-family:\'JetBrains Mono\',monospace;font-size:.68rem;' +
+                  'padding:4px 12px;border-radius:99px;display:inline-block;margin-bottom:1.2rem;' +
+                  'background:' + pillBg + ';border:1px solid ' + pillBd + ';color:' + accentCol + '">' +
+        dbLabel +
+      '</div>' +
+
+      '<div style="display:flex;gap:.6rem;justify-content:center">' +
+        '<button onclick="document.getElementById(\'_regCard\').remove()" ' +
+          'style="padding:.55rem 1.4rem;border-radius:10px;border:1px solid var(--border);' +
+                 'background:transparent;color:var(--tx2);font-size:.84rem;cursor:pointer" ' +
+          'onmouseover="this.style.background=\'var(--bg3)\'" onmouseout="this.style.background=\'transparent\'">' +
+          'Close' +
+        '</button>' +
+        '<button onclick="document.getElementById(\'_regCard\').remove();openAddPatient()" ' +
+          'style="padding:.55rem 1.4rem;border-radius:10px;border:none;' +
+                 'background:var(--c1,#00d4ff);color:#000;font-size:.84rem;font-weight:600;cursor:pointer">' +
+          '+ Add another' +
+        '</button>' +
+      '</div>' +
+    '</div>';
+
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  setTimeout(() => { document.getElementById('_regCard')?.remove(); }, 8000);
 }
 
 // ── Search ───────────────────────────────────
@@ -503,12 +924,22 @@ function initSearch() {
   `;
   wrap.appendChild(dropdown);
 
-  // All patients from table (live) + static index
+  // All patients from live Supabase cache + static index
   function getSearchData() {
-    const patients = DEMO_PATIENTS.map(p => ({
-      _type: 'patient', name: p.name, desc: `${p.id} · Age ${p.age} · ${p.last}`,
-      id: p.id, risk: p.risk, icon: '👤', url: null
-    }));
+    // _allPatients is populated by loadRecentPatients() from Supabase — always current
+    const source = (_allPatients && _allPatients.length) ? _allPatients : DEMO_PATIENTS;
+    const patients = source.map((p, i) => {
+      const n = normPatient(p, i);
+      return {
+        _type: 'patient',
+        name:  n.name,
+        desc:  `${n.id} · Age ${n.age} · ${n.last}`,
+        id:    n.id,
+        risk:  n.risk,
+        icon:  '👤',
+        url:   null,
+      };
+    });
     return [...patients, ...SEARCH_INDEX.filter(x => x._type !== 'patient')];
   }
 
@@ -866,6 +1297,8 @@ function initUpload() {
     imgFiles.forEach((f, i) => {
       const reader = new FileReader();
       reader.onload = ev => {
+        // Save data URL globally so PDF generator can always access it
+        if (i === 0) window._lastScanDataUrl = ev.target.result;
         // Full-width image with overlay remove button
         const wrap = document.createElement('div');
         wrap.style.cssText = 'position:relative;width:100%;border-radius:10px;overflow:hidden';
@@ -898,6 +1331,7 @@ window.resetUploadZone = function(btn) {
   if (!zone || !preview) return;
   preview.innerHTML = '';
   preview.style.cssText = '';
+  window._lastScanDataUrl = null;  // clear saved scan image
   // Show drop UI again
   zone.querySelector('.upload-icon-wrap') && (zone.querySelector('.upload-icon-wrap').style.display = '');
   zone.querySelector('.upload-title')     && (zone.querySelector('.upload-title').style.display = '');
@@ -1095,6 +1529,27 @@ function displayResults(diagnosis, recommendation, riskScore, probs, tier, predi
   window._lastRiskScore       = riskScore;
   window._lastTier            = tierLabel;
   window._lastConfidence      = typeof confidence !== 'undefined' ? confidence : '';
+
+  // ── Auto-save scan to Supabase ────────────────
+  (async () => {
+    const scanRow = {
+      patient_id:      window._lastPatientId   || null,
+      diagnosis,
+      recommendation,
+      predicted_class: window._lastPredictedClass || null,
+      tier:            tierLabel,
+      risk_score:      riskScore,
+      confidence:      window._lastConfidence   || null,
+      gradcam_path:    window._gradcamPath       || null,
+      doctor_name:     localStorage.getItem('gs_doctor_name') || 'Dr. Admin',
+      hospital:        localStorage.getItem('gs_hospital')    || 'City Cancer Institute',
+    };
+    const scan = await sbInsertScan(scanRow);
+    if (scan && window._lastRawProbs && Object.keys(window._lastRawProbs).length) {
+      await sbInsertProbabilities(scan.id, window._lastRawProbs);
+    }
+    if (scan) window._lastScanId = scan.id;
+  })();
 
   const toastIcon = tierIcons[tierLabel] || '🔬';
   showToast(`${toastIcon} ${diagnosis} — Risk ${riskScore}%`, tierLabel==='CRITICAL'?'warn':'ok');
@@ -1729,6 +2184,15 @@ async function submitFeedback(verdict) {
   const btn = verdict === 'confirm' ? document.getElementById('confirmBtn') : document.getElementById('incorrectBtn');
   if (btn) { btn.classList.add('btn-loading'); btn.innerHTML = '<span class="btn-spinner"></span>'; }
 
+  // ── Save to Supabase ──────────────────────────
+  await sbInsertFeedback(
+    window._lastScanId    || null,
+    window._lastPatientId || null,
+    verdict,
+    starRating,
+    notes
+  );
+
   try {
     await fetch('/feedback', {
       method: 'POST',
@@ -1758,10 +2222,83 @@ async function downloadReport() {
     btn.innerHTML = '<span class="btn-spinner"></span> Generating PDF...';
   }
 
-  // Collect all available scan data to send to Flask
   const diagEl = document.getElementById('diagnosisText');
   const recEl  = document.getElementById('recommendationText');
   const rvEl   = document.getElementById('riskValue');
+
+  // ── 1. Scan image — use globally saved data URL (set at file read time) ──
+  let scanImageDataUrl = window._lastScanDataUrl || null;
+  if (!scanImageDataUrl) {
+    try {
+      const img = document.querySelector('#uploadPreview img');
+      if (img && img.src && img.src.startsWith('data:')) {
+        scanImageDataUrl = img.src;
+        window._lastScanDataUrl = scanImageDataUrl;
+      }
+    } catch (_) {}
+  }
+
+  // ── 2. GradCAM image — read composited canvas first ──
+  let gradcamImageDataUrl = null;
+  try {
+    const gcCanvas = document.querySelector('#gradcamWrap canvas');
+    if (gcCanvas) {
+      gradcamImageDataUrl = gcCanvas.toDataURL('image/jpeg', 0.92);
+    }
+  } catch (_) {}
+  if (!gradcamImageDataUrl && window._gradcamPath) {
+    gradcamImageDataUrl = await new Promise(resolve => {
+      const tmpImg = new Image();
+      tmpImg.onload = () => {
+        try {
+          const c = document.createElement('canvas');
+          c.width = tmpImg.naturalWidth || 400;
+          c.height = tmpImg.naturalHeight || 400;
+          c.getContext('2d').drawImage(tmpImg, 0, 0);
+          resolve(c.toDataURL('image/jpeg', 0.92));
+        } catch (e) { resolve(null); }
+      };
+      tmpImg.onerror = () => resolve(null);
+      tmpImg.src = window._gradcamPath + (window._gradcamPath.includes('?') ? '&' : '?') + '_r=' + Date.now();
+    });
+  }
+  if (!gradcamImageDataUrl) {
+    try {
+      const gcImg = document.querySelector('#gradcamWrap img');
+      if (gcImg && gcImg.src && gcImg.src.startsWith('data:')) {
+        gradcamImageDataUrl = gcImg.src;
+      } else if (gcImg && gcImg.src) {
+        gradcamImageDataUrl = await new Promise(resolve => {
+          const tmp = new Image();
+          tmp.onload = () => {
+            try {
+              const c = document.createElement('canvas');
+              c.width = tmp.naturalWidth || 400; c.height = tmp.naturalHeight || 400;
+              c.getContext('2d').drawImage(tmp, 0, 0);
+              resolve(c.toDataURL('image/jpeg', 0.92));
+            } catch (_) { resolve(null); }
+          };
+          tmp.onerror = () => resolve(null);
+          tmp.src = gcImg.src;
+        });
+      }
+    } catch (_) {}
+  }
+
+  // ── 3. Logo — base64 SVG, works in all contexts ──
+  const logoSvgRaw = [
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 64">',
+    '<rect width="280" height="64" fill="#0a0e1a" rx="10"/>',
+    '<circle cx="30" cy="32" r="17" fill="none" stroke="#00d4ff" stroke-width="3"/>',
+    '<circle cx="30" cy="32" r="10" fill="none" stroke="#ff3d6e" stroke-width="2.5"/>',
+    '<line x1="42" y1="20" x2="52" y2="10" stroke="#00d4ff" stroke-width="2.5" stroke-linecap="round"/>',
+    '<circle cx="52" cy="10" r="3.5" fill="#00d4ff"/>',
+    '<text x="60" y="26" font-family="Helvetica Neue,Arial,sans-serif" font-size="17" font-weight="800" fill="#ffffff" letter-spacing="0.5">GASTRIC</text>',
+    '<text x="60" y="46" font-family="Helvetica Neue,Arial,sans-serif" font-size="17" font-weight="800" fill="#00d4ff" letter-spacing="0.5">SENTINEL</text>',
+    '<text x="60" y="59" font-family="Helvetica Neue,Arial,sans-serif" font-size="7.5" fill="#8b9ab4" letter-spacing="2.5">AI DIAGNOSTIC PLATFORM</text>',
+    '</svg>'
+  ].join('');
+  const logoDataUrl = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(logoSvgRaw)));
 
   const payload = {
     diagnosis:       diagEl?.textContent?.trim()  || window._lastDiagnosis    || 'N/A',
@@ -1774,40 +2311,36 @@ async function downloadReport() {
     doctor:          localStorage.getItem('gs_doctor_name') || 'Dr. Admin',
     hospital:        localStorage.getItem('gs_hospital')    || 'City Cancer Institute',
     patient_name:    window._lastPatientName      || 'Anonymous',
+    logo_data_url:   logoDataUrl,
+    scan_image:      scanImageDataUrl,
+    gradcam_image:   gradcamImageDataUrl,
   };
 
-  try {
-    const res = await fetch('/generate_report', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(payload),
-    });
+  // ── KEY FIX: Always render the full client-side HTML report (with images/logo).
+  //    Flask /generate_report runs server-side and cannot access browser image data,
+  //    so images only work in the client-built report. We call Flask in parallel
+  //    only to trigger any server-side logging/storage, but ALWAYS show the HTML report.
+  // ────────────────────────────────────────────────────────────────────────────────
+  _printFallbackReport(payload);   // ← always fires immediately with all images
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || `Server returned ${res.status}`);
-    }
-
-    // Flask returns the PDF directly as a blob
-    const blob = await res.blob();
-    if (blob.type !== 'application/pdf') {
-      throw new Error('Response is not a PDF');
-    }
-    const url = URL.createObjectURL(blob);
-    const a   = document.createElement('a');
-    a.href    = url;
-    a.download = `gastric_sentinel_${new Date().toISOString().slice(0,10)}.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 2000);
-    showToast('📄 PDF report downloaded successfully', 'ok');
-
-  } catch (err) {
-    console.warn('PDF generation error:', err.message);
-    showToast(`⚠️ PDF error: ${err.message}`, 'warn', 4000);
-    // Fallback: generate a minimal HTML→print page
-    _printFallbackReport(payload);
-  }
+  // Also attempt Flask call for server-side archiving (fire-and-forget, no await)
+  fetch('/generate_report', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({
+      // Send only non-binary fields to avoid huge payloads; images are client-only
+      diagnosis:       payload.diagnosis,
+      recommendation:  payload.recommendation,
+      risk_score:      payload.risk_score,
+      confidence:      payload.confidence,
+      predicted_class: payload.predicted_class,
+      tier:            payload.tier,
+      probabilities:   payload.probabilities,
+      doctor:          payload.doctor,
+      hospital:        payload.hospital,
+      patient_name:    payload.patient_name,
+    }),
+  }).catch(() => {}); // silently ignore errors
 
   if (btn) {
     btn.classList.remove('btn-loading');
@@ -1816,57 +2349,112 @@ async function downloadReport() {
 }
 
 function _printFallbackReport(d) {
-  const tier_color = {CRITICAL:'#ff3d6e',SUSPICIOUS:'#ffb340',NEGATIVE:'#00ff9f',UNKNOWN:'#8b9ab4'}[d.tier]||'#8b9ab4';
+  const TC = { CRITICAL:'#e8003d', SUSPICIOUS:'#e07b00', NEGATIVE:'#007a4d', DEMO:'#4a6fa5', UNKNOWN:'#5a6a7a' };
+  const tc = TC[d.tier] || TC.UNKNOWN;
+
+  // ── Logo: always use the base64 data URL passed in payload ──
+  const logoBlock = d.logo_data_url
+    ? `<img src="${d.logo_data_url}" alt="Gastric Sentinel" style="height:60px;display:block;">`
+    : `<div style="font-size:24px;font-weight:900;color:#0055bb;letter-spacing:1px;line-height:1.1;">GASTRIC<br><span style="color:#0099cc;">SENTINEL</span></div>`;
+
+  // ── Scan images: shown BEFORE result, side by side ──
+  const hasScan = !!d.scan_image;
+  const hasGC   = !!d.gradcam_image;
+  const imgBlock = (hasScan || hasGC) ? `
+    <div style="margin:0 0 22px;">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#444;border-bottom:1.5px solid #ddd;padding-bottom:5px;margin-bottom:12px;">Pathology Scan Images</div>
+      <div style="display:flex;gap:14px;">
+        ${hasScan ? `
+        <div style="flex:1;border:1px solid #d0d0d0;border-radius:8px;overflow:hidden;background:#f8f8f8;">
+          <div style="background:#e8f0ff;padding:6px 12px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#2255aa;border-bottom:1px solid #c8d8f0;">
+            ◉ Original Scan &nbsp;<span style="font-weight:400;opacity:.7;">PRE-ANALYSIS</span>
+          </div>
+          <img src="${d.scan_image}" alt="Original scan" style="width:100%;height:210px;object-fit:cover;display:block;">
+          <div style="padding:5px 10px;font-size:9px;color:#666;line-height:1.4;">Uploaded histopathology image submitted for AI analysis.</div>
+        </div>` : ''}
+        ${hasGC ? `
+        <div style="flex:1;border:1px solid #d0d0d0;border-radius:8px;overflow:hidden;background:#f8f8f8;">
+          <div style="background:#fff0e8;padding:6px 12px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#b04000;border-bottom:1px solid #f0c8a0;">
+            ◉ GradCAM Heatmap &nbsp;<span style="font-weight:400;opacity:.7;">POST-ANALYSIS</span>
+          </div>
+          <img src="${d.gradcam_image}" alt="GradCAM heatmap" style="width:100%;height:210px;object-fit:cover;display:block;">
+          <div style="padding:5px 10px;font-size:9px;color:#666;line-height:1.4;">Grad-CAM overlay — warm/red regions show areas most influential in the AI prediction.</div>
+        </div>` : ''}
+      </div>
+    </div>` : '';
+
+  // ── Probabilities ──
+  const probBlock = Object.keys(d.probabilities || {}).length ? `
+    <div style="margin-bottom:20px;">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#444;border-bottom:1.5px solid #ddd;padding-bottom:5px;margin-bottom:10px;">Class Probabilities</div>
+      ${Object.entries(d.probabilities).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;font-size:11px;">
+          <span style="width:38px;font-family:monospace;font-weight:700;color:#333;">${k}</span>
+          <div style="flex:1;height:8px;background:#e5e5e5;border-radius:4px;overflow:hidden;">
+            <div style="height:100%;width:${Math.round(v*100)}%;background:${v>0.5?tc:'#3377cc'};border-radius:4px;"></div>
+          </div>
+          <span style="width:42px;text-align:right;color:#555;">${(v*100).toFixed(1)}%</span>
+        </div>`).join('')}
+    </div>` : '';
+
   const html = `<!DOCTYPE html>
-<html><head><title>Gastric Sentinel Report</title>
+<html><head><meta charset="utf-8">
+<title>Gastric Sentinel — Diagnostic Report</title>
 <style>
-  body{font-family:'Helvetica Neue',sans-serif;background:#fff;color:#111;margin:0;padding:30px 40px}
-  h1{color:#0066cc;font-size:22px;margin-bottom:4px}
-  .sub{color:#666;font-size:11px;margin-bottom:20px;border-bottom:1px solid #ccc;padding-bottom:10px}
-  .meta{display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;font-size:11px;margin-bottom:20px}
-  .meta b{color:#333} .meta span{color:#666}
-  .result{border:2px solid ${tier_color};border-radius:6px;padding:16px;margin-bottom:20px;background:#f9f9f9}
-  .dx{font-size:18px;font-weight:bold;color:${tier_color};margin-bottom:6px}
-  .tier{font-size:11px;font-family:monospace;background:${tier_color};color:#000;padding:2px 8px;border-radius:3px;display:inline-block}
-  .info{font-size:11px;color:#444;margin-top:8px} .rec{font-size:12px;color:#333;margin-top:10px}
-  .probs{margin-bottom:20px} .prob-row{display:flex;align-items:center;gap:8px;margin-bottom:4px;font-size:11px}
-  .bar-track{flex:1;height:8px;background:#e0e0e0;border-radius:4px;overflow:hidden}
-  .bar-fill{height:100%;background:#0066cc;border-radius:4px}
-  .footer{margin-top:30px;border-top:1px solid #ccc;padding-top:8px;font-size:10px;color:#888;display:flex;justify-content:space-between}
-  @media print{body{padding:15px 20px}}
-</style></head><body>
-<h1>GASTRIC SENTINEL</h1>
-<div class="sub">AI Diagnostic Report · EfficientNet-B4 v3.2 · Generated: ${new Date().toLocaleString()}</div>
-<div class="meta">
-  <div><b>Patient:</b> <span>${d.patient_name}</span></div>
-  <div><b>Physician:</b> <span>${d.doctor}</span></div>
-  <div><b>Institution:</b> <span>${d.hospital}</span></div>
-  <div><b>Report ID:</b> <span>GS-${Date.now()}</span></div>
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;background:#fff;color:#111;padding:32px 44px;font-size:12px;line-height:1.55;}
+  @media print{body{padding:18px 24px;}}
+</style>
+</head><body>
+
+<!-- HEADER -->
+<div style="display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:12px;border-bottom:2.5px solid #0055bb;margin-bottom:5px;">
+  <div>${logoBlock}</div>
+  <div style="text-align:right;font-size:10px;color:#666;line-height:1.9;">
+    <span style="font-weight:700;color:#333;">Report ID:</span> GS-${Date.now()}<br>
+    <span style="font-weight:700;color:#333;">Generated:</span> ${new Date().toLocaleString()}
+  </div>
 </div>
-<div class="result">
-  <div class="tier">${d.tier}</div>
-  <div class="dx">${d.diagnosis}</div>
-  <div class="info">Class: <b>${d.predicted_class}</b> &nbsp;·&nbsp; Risk Score: <b>${d.risk_score}%</b> &nbsp;·&nbsp; Confidence: <b>${d.confidence}%</b></div>
-  <div class="rec">${d.recommendation}</div>
+<div style="font-size:10px;color:#888;margin:5px 0 18px;padding-bottom:11px;border-bottom:1px solid #e5e5e5;">
+  AI Diagnostic Report &nbsp;·&nbsp; EfficientNet-B4 v3.2 &nbsp;·&nbsp; Gastric Histopathology Analysis
 </div>
-${Object.keys(d.probabilities).length > 0 ? `
-<div class="probs"><b style="font-size:12px">Class Probabilities</b><br><br>
-${Object.entries(d.probabilities).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`
-  <div class="prob-row">
-    <span style="width:40px;font-family:monospace;font-size:10px">${k}</span>
-    <div class="bar-track"><div class="bar-fill" style="width:${Math.round(v*100)}%"></div></div>
-    <span style="width:44px;text-align:right">${(v*100).toFixed(1)}%</span>
-  </div>`).join('')}
-</div>` : ''}
-<div class="footer">
+
+<!-- PATIENT META -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 30px;margin-bottom:20px;font-size:11px;">
+  <div><b style="color:#333;">Patient:</b> <span style="color:#555;">${d.patient_name}</span></div>
+  <div><b style="color:#333;">Physician:</b> <span style="color:#555;">${d.doctor}</span></div>
+  <div><b style="color:#333;">Institution:</b> <span style="color:#555;">${d.hospital}</span></div>
+  <div><b style="color:#333;">Scan Date:</b> <span style="color:#555;">${new Date().toLocaleDateString()}</span></div>
+</div>
+
+<!-- SCAN IMAGES (original + gradcam) -->
+${imgBlock}
+
+<!-- AI RESULT -->
+<div style="border:2px solid ${tc};border-radius:8px;padding:16px 18px;margin-bottom:20px;background:#fafafa;">
+  <div style="font-family:monospace;font-size:10.5px;font-weight:700;background:${tc};color:#fff;padding:2px 9px;border-radius:3px;display:inline-block;margin-bottom:8px;">${d.tier}</div>
+  <div style="font-size:20px;font-weight:800;color:${tc};margin-bottom:6px;">${d.diagnosis}</div>
+  <div style="font-size:11px;color:#444;margin-bottom:8px;">
+    Class: <b>${d.predicted_class}</b> &nbsp;·&nbsp; Risk Score: <b>${d.risk_score}%</b> &nbsp;·&nbsp; Confidence: <b>${d.confidence}%</b>
+  </div>
+  <div style="font-size:12px;color:#333;line-height:1.5;">${d.recommendation}</div>
+</div>
+
+<!-- PROBABILITIES -->
+${probBlock}
+
+<!-- FOOTER -->
+<div style="margin-top:28px;border-top:1px solid #ddd;padding-top:8px;font-size:9.5px;color:#888;display:flex;justify-content:space-between;">
   <span>GASTRIC SENTINEL AI DIAGNOSTIC PLATFORM</span>
-  <span style="color:#c00;font-weight:bold">CONFIDENTIAL MEDICAL DOCUMENT</span>
+  <span style="color:#c00;font-weight:700;">CONFIDENTIAL MEDICAL DOCUMENT</span>
 </div>
-<script>window.onload=()=>window.print()</script>
+
+<script>window.onload = () => window.print();</script>
 </body></html>`;
-  const w = window.open('','_blank');
+
+  const w = window.open('', '_blank');
   if (w) { w.document.write(html); w.document.close(); }
-  else showToast('Allow pop-ups to print report', 'warn');
+  else showToast('Allow pop-ups to print the report', 'warn');
 }
 
 // ── AI Chatbot ────────────────────────────────
@@ -1976,41 +2564,13 @@ function filterPatients(risk) {
   document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
   if (event?.target) event.target.classList.add('active');
   window._activeFilter = risk;
-  applyPatientFilters();
+  _currentPage = 1;
+  renderPatientPage();
 }
 
 function applyPatientFilters() {
-  const risk     = window._activeFilter || 'all';
-  const query    = (window._patientSearchQuery || '').toLowerCase();
-  const rows     = document.querySelectorAll('#patientsTable tr');
-  let   visible  = 0;
-
-  rows.forEach(row => {
-    if (!row.querySelector('td')) { row.style.display = ''; return; }
-
-    const rowText = row.textContent.toLowerCase();
-
-    // Risk filter
-    let riskMatch = true;
-    if (risk !== 'all' && risk !== 'new') {
-      const badge = row.querySelector('.badge');
-      riskMatch = badge ? badge.textContent.toLowerCase().includes(risk) : false;
-    }
-    if (risk === 'new') {
-      riskMatch = rowText.includes('new');
-    }
-
-    // Text search filter
-    const searchMatch = !query || rowText.includes(query);
-
-    const show = riskMatch && searchMatch;
-    row.style.display = show ? '' : 'none';
-    if (show) visible++;
-  });
-
-  // Update count label
-  const countEl = document.getElementById('patientFilterCount');
-  if (countEl) countEl.textContent = `Showing ${visible} patient${visible!==1?'s':''}`;
+  _currentPage = 1;
+  renderPatientPage();
 }
 
 // ── Patient Inline Search ─────────────────────
@@ -2078,17 +2638,19 @@ function initPatientSearch() {
     const q = inp.value.trim();
     window._patientSearchQuery = q;
     clr.style.display = q ? '' : 'none';
-    applyPatientFilters();
-
-    // Highlight matched cells
-    document.querySelectorAll('#patientsTable tr').forEach(row => {
-      row.classList.remove('pt-row-match');
-      if (q && row.textContent.toLowerCase().includes(q.toLowerCase()) && row.style.display !== 'none') {
-        row.classList.add('pt-row-match');
-        row.style.animation = 'ptRowHighlight .6s ease forwards';
-        setTimeout(() => { row.style.animation = ''; }, 700);
-      }
-    });
+    _currentPage = 1;
+    renderPatientPage();
+    // Highlight matched rows in the current page
+    setTimeout(() => {
+      document.querySelectorAll('#patientsTable tr').forEach(row => {
+        row.classList.remove('pt-row-match');
+        if (q && row.textContent.toLowerCase().includes(q.toLowerCase())) {
+          row.classList.add('pt-row-match');
+          row.style.animation = 'ptRowHighlight .6s ease forwards';
+          setTimeout(() => { row.style.animation = ''; }, 700);
+        }
+      });
+    }, 30);
   });
 
   clr?.addEventListener('click', () => {
@@ -2524,9 +3086,9 @@ function reportCustomHTML() {
 }
 
 
-// ═══════════
+// ══════════════════════════════════════════════
 // RISK ALERTS PANEL
-// ═══════════
+// ══════════════════════════════════════════════
 const RISK_ALERTS = [
   { id:1, patient:'Kiran Desai',   pid:'P-0037', age:67, dx:'Adenocarcinoma',       score:94, status:'critical', action:'Immediate oncology referral', since:'2h ago' },
   { id:2, patient:'Arjun Mehta',   pid:'P-0041', age:58, dx:'High-Grade Dysplasia', score:82, status:'urgent',   action:'Endoscopic resection consult', since:'4h ago' },
@@ -2607,9 +3169,9 @@ window.dismissAlert = function(id, btn) {
 };
 
 
-// ═════════
+// ══════════════════════════════════════════════
 // SETTINGS PANEL
-// ═════════
+// ══════════════════════════════════════════════
 function openSettings() {
   const existing = document.getElementById('settingsModal');
   if (existing) { existing.classList.add('open'); return; }
@@ -2800,9 +3362,9 @@ function applySavedSettings() {
 }
 
 
-// ══════════
+// ══════════════════════════════════════════════
 // PROFILE DROPDOWN (Google-style)
-// ══════════
+// ══════════════════════════════════════════════
 function initProfileDropdown() {
   const avatarBtn = document.querySelector('.avatar-btn');
   if (!avatarBtn) return;
@@ -3148,11 +3710,11 @@ document.addEventListener('DOMContentLoaded', () => {
     bd.addEventListener('click', e => { if (e.target === bd) bd.classList.remove('open'); });
   });
 });
-// ═══════════
+// ═══════════════════════════════════════════════════════════════
 // NEW FEATURES — PDF Modal, Batch Upload, Confidence Trend, Chatbot Fix
-// ══════════=
+// ═══════════════════════════════════════════════════════════════
 
-// ── 1. PDF Report Modal ─
+// ── 1. PDF Report Modal ──────────────────────────────────────────
 function openReportModal() {
   const existing = document.getElementById('reportModal');
   if (existing) { existing.classList.add('open'); return; }
@@ -3517,7 +4079,7 @@ function _resetBatchModal() {
 }
 
 
-// ── 3. Confidence Trend Chart ───────────
+// ── 3. Confidence Trend Chart ────────────────────────────────────
 let _trendData = JSON.parse(localStorage.getItem('gs_trend_data') || '[]');
 
 function recordTrendPoint(tier, confidence, predictedClass) {
@@ -3614,7 +4176,7 @@ function clearTrendData() {
 }
 
 
-// ── 4. Improved Chatbot ───────
+// ── 4. Improved Chatbot ──────────────────────────────────────────
 async function sendChatMessageV2() {
   const input = document.getElementById('chatInput');
   const body  = document.getElementById('chatBody');
@@ -3703,7 +4265,7 @@ window.sendChatMessage = sendChatMessageV2;
 
 // ── 5. Wire everything into displayResults (handled in section below) ──
 
-// ── 6. Init on DOM ready ─────────────
+// ── 6. Init on DOM ready ────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   // Wire new report button
   document.getElementById('downloadReport')?.addEventListener('click', e => {
@@ -3725,9 +4287,9 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('batchUploadBtn')?.addEventListener('click', openBatchModal);
 });
 
-
+// ════════════════════════════════════════════════════════════════
 // DASHBOARD INTRO ANIMATION
-
+// ════════════════════════════════════════════════════════════════
 function runDashboardIntro() {
   if (!document.getElementById('patientsCount')) return;
   if (sessionStorage.getItem('gs_intro_done')) return;
