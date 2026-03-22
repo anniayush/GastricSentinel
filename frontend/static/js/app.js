@@ -2,8 +2,8 @@
 //  Replace the two values below with your project credentials.
 //  Dashboard → Settings → API → Project URL & anon/public key
 
-const SUPABASE_URL  = 'paste your project url here from the dashboard, e.g. https://xyzcompany.supabase.co';
-const SUPABASE_ANON = 'paste your anon key here from the dashboard';
+const SUPABASE_URL  = 'https://xqobdsessewpfvzoqngj.supabase.co';
+const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhxb2Jkc2Vzc2V3cGZ2em9xbmdqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5MzYyNzEsImV4cCI6MjA4OTUxMjI3MX0.xj8eAg9d_nPePiJHOT5S5pZvocrYkWNxc-fa3LeVUSk';
 
 // Lazy-init: the client is created once on first use so the
 // script works even if the Supabase CDN hasn't loaded yet.
@@ -3302,65 +3302,128 @@ function reportCustomHTML() {
 // ══════════════════════════════════════════════
 // RISK ALERTS PANEL
 // ══════════════════════════════════════════════
-const RISK_ALERTS = [
-  { id:1, patient:'Kiran Desai',   pid:'P-0037', age:67, dx:'Adenocarcinoma',       score:94, status:'critical', action:'Immediate oncology referral', since:'2h ago' },
-  { id:2, patient:'Arjun Mehta',   pid:'P-0041', age:58, dx:'High-Grade Dysplasia', score:82, status:'urgent',   action:'Endoscopic resection consult', since:'4h ago' },
-  { id:3, patient:'Priya Sharma',  pid:'P-0040', age:44, dx:'Chronic Gastritis',    score:45, status:'watch',    action:'H. pylori test + follow-up',   since:'1d ago' },
-  { id:4, patient:'Sunita Patel',  pid:'P-0038', age:51, dx:'Low-Grade Dysplasia',  score:38, status:'watch',    action:'Biopsy repeat in 3 months',    since:'1d ago' },
-  { id:5, patient:'Raj Verma',     pid:'P-0035', age:71, dx:'High-Grade Dysplasia', score:79, status:'urgent',   action:'ESD evaluation scheduled',     since:'2d ago' },
-];
+// ── Risk alert helpers ────────────────────────
+// Derives alert status + recommended action from a patient record.
+function _riskAlertStatus(p) {
+  const risk = (p.risk || '').toLowerCase();
+  const riskScore = typeof p.risk_score === 'number'
+    ? p.risk_score
+    : risk === 'high' ? 85 : risk === 'mid' || risk === 'medium' ? 45 : 20;
 
-function openRiskAlerts() {
-  const existing = document.getElementById('riskAlertsModal');
-  if (existing) { existing.classList.add('open'); return; }
+  let status, action;
+  if (riskScore >= 80 || risk === 'high') {
+    status = riskScore >= 90 ? 'critical' : 'urgent';
+    action = riskScore >= 90 ? 'Immediate oncology referral' : 'Endoscopic resection consult';
+  } else if (riskScore >= 35 || risk === 'mid' || risk === 'medium') {
+    status = 'watch';
+    const dx = (p.last || p.diagnosis || '').toLowerCase();
+    action = dx.includes('gastritis') ? 'H. pylori test + follow-up' : 'Biopsy repeat in 3 months';
+  } else {
+    return null; // low-risk patients don't appear in Risk Alert Centre
+  }
+  return { status, action, riskScore };
+}
+
+// Formats an ISO date string as a relative "X ago" label.
+function _relativeTime(iso) {
+  if (!iso) return '';
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60)  return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24)   return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
+// Builds the inner HTML for the alert list using live patient data.
+function _buildAlertRows(patients) {
+  // Filter to only alertable patients and sort: critical → urgent → watch
+  const ORDER = { critical: 0, urgent: 1, watch: 2 };
+  const alerts = patients
+    .map((raw, i) => {
+      const p = normPatient(raw, i);
+      const info = _riskAlertStatus(raw);
+      if (!info) return null;
+      return { ...info, patient: p.name, pid: p.id, age: p.age,
+               dx: p.last || raw.diagnosis || 'Unknown', since: _relativeTime(raw.updated_at || raw.date) };
+    })
+    .filter(Boolean)
+    .sort((a, b) => ORDER[a.status] - ORDER[b.status]);
+
+  if (!alerts.length) {
+    return `<div style="text-align:center;padding:2rem;color:var(--tx3);font-family:'JetBrains Mono',monospace;font-size:.82rem">
+      ✅ No active risk alerts
+    </div>`;
+  }
+
+  return alerts.map((a, idx) => {
+    const col = a.status==='critical'?'var(--c3)':a.status==='urgent'?'var(--c4)':'var(--c1)';
+    const bg  = a.status==='critical'?'rgba(255,61,110,.07)':a.status==='urgent'?'rgba(255,179,64,.07)':'rgba(0,212,255,.05)';
+    const bc  = a.status==='critical'?'rgba(255,61,110,.25)':a.status==='urgent'?'rgba(255,179,64,.2)':'rgba(0,212,255,.18)';
+    return `
+    <div data-alert-idx="${idx}" style="background:${bg};border:1px solid ${bc};border-radius:var(--r);padding:.9rem 1rem;border-left:3px solid ${col}">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.4rem;flex-wrap:wrap;gap:.4rem">
+        <div style="display:flex;align-items:center;gap:.6rem">
+          <span style="font-weight:600;color:var(--tx);font-size:.9rem">${a.patient}</span>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:.7rem;color:var(--c1)">${a.pid}</span>
+          <span style="font-size:.72rem;color:var(--tx3)">Age ${a.age}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:.5rem">
+          <span style="font-family:'JetBrains Mono',monospace;font-size:.8rem;font-weight:700;color:${col}">Risk ${a.riskScore}%</span>
+          <span style="font-size:.68rem;padding:2px 8px;border-radius:99px;background:${bg};border:1px solid ${bc};color:${col};text-transform:uppercase;letter-spacing:.06em;font-family:'JetBrains Mono',monospace">${a.status}</span>
+        </div>
+      </div>
+      <div style="font-size:.82rem;color:var(--tx2);margin-bottom:.5rem">Dx: <strong style="color:var(--tx)">${a.dx}</strong></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem">
+        <div style="font-size:.78rem;color:var(--tx3)">🎯 ${a.action}</div>
+        <div style="display:flex;gap:.4rem">
+          ${a.since ? `<span style="font-size:.65rem;color:var(--tx4);font-family:'JetBrains Mono',monospace">${a.since}</span>` : ''}
+          <button onclick="window.location.href='/patients'" style="font-size:.75rem;background:none;border:none;color:${col};cursor:pointer;text-decoration:underline">View Patient →</button>
+          <button onclick="dismissAlert(${idx},this)" style="font-size:.75rem;background:none;border:none;color:var(--tx3);cursor:pointer">Dismiss</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// Builds the summary badge row (Critical: N · Urgent: N · Watch: N).
+function _buildAlertBadges(patients) {
+  let critical = 0, urgent = 0, watch = 0;
+  patients.forEach((raw, i) => {
+    const info = _riskAlertStatus(raw);
+    if (!info) return;
+    if (info.status === 'critical') critical++;
+    else if (info.status === 'urgent') urgent++;
+    else watch++;
+  });
+  return `
+    <span style="background:rgba(255,61,110,.12);color:var(--c3);border:1px solid rgba(255,61,110,.3);border-radius:99px;padding:3px 10px;font-size:.75rem;font-family:'JetBrains Mono',monospace">● Critical: ${critical}</span>
+    <span style="background:rgba(255,179,64,.12);color:var(--c4);border:1px solid rgba(255,179,64,.3);border-radius:99px;padding:3px 10px;font-size:.75rem;font-family:'JetBrains Mono',monospace">● Urgent: ${urgent}</span>
+    <span style="background:rgba(0,212,255,.12);color:var(--c1);border:1px solid rgba(0,212,255,.3);border-radius:99px;padding:3px 10px;font-size:.75rem;font-family:'JetBrains Mono',monospace">● Watch: ${watch}</span>`;
+}
+
+async function openRiskAlerts() {
+  // Always destroy stale modal so it re-renders with fresh data
+  document.getElementById('riskAlertsModal')?.remove();
 
   const modal = document.createElement('div');
   modal.id = 'riskAlertsModal';
   modal.className = 'modal-backdrop';
+
+  // Show the shell immediately with a loading state
   modal.innerHTML = `
     <div class="modal" style="max-width:660px">
       <div class="modal-hd">
         <div class="modal-title">⚠️ Risk Alert Centre</div>
         <button class="modal-x" onclick="document.getElementById('riskAlertsModal').classList.remove('open')">✕</button>
       </div>
-
-      <div style="display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap">
-        <span style="background:rgba(255,61,110,.12);color:var(--c3);border:1px solid rgba(255,61,110,.3);border-radius:99px;padding:3px 10px;font-size:.75rem;font-family:'JetBrains Mono',monospace">● Critical: 1</span>
-        <span style="background:rgba(255,179,64,.12);color:var(--c4);border:1px solid rgba(255,179,64,.3);border-radius:99px;padding:3px 10px;font-size:.75rem;font-family:'JetBrains Mono',monospace">● Urgent: 2</span>
-        <span style="background:rgba(0,212,255,.12);color:var(--c1);border:1px solid rgba(0,212,255,.3);border-radius:99px;padding:3px 10px;font-size:.75rem;font-family:'JetBrains Mono',monospace">● Watch: 2</span>
+      <div id="_riskBadges" style="display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap">
+        <span style="color:var(--tx3);font-size:.8rem;font-family:'JetBrains Mono',monospace">Loading from Supabase…</span>
       </div>
-
-      <div style="display:flex;flex-direction:column;gap:.65rem;max-height:380px;overflow-y:auto;padding-right:.25rem">
-        ${RISK_ALERTS.map(a => {
-          const col = a.status==='critical'?'var(--c3)':a.status==='urgent'?'var(--c4)':'var(--c1)';
-          const bg  = a.status==='critical'?'rgba(255,61,110,.07)':a.status==='urgent'?'rgba(255,179,64,.07)':'rgba(0,212,255,.05)';
-          const bc  = a.status==='critical'?'rgba(255,61,110,.25)':a.status==='urgent'?'rgba(255,179,64,.2)':'rgba(0,212,255,.18)';
-          return `
-          <div style="background:${bg};border:1px solid ${bc};border-radius:var(--r);padding:.9rem 1rem;border-left:3px solid ${col}">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.4rem;flex-wrap:wrap;gap:.4rem">
-              <div style="display:flex;align-items:center;gap:.6rem">
-                <span style="font-weight:600;color:var(--tx);font-size:.9rem">${a.patient}</span>
-                <span style="font-family:'JetBrains Mono',monospace;font-size:.7rem;color:var(--c1)">${a.pid}</span>
-                <span style="font-size:.72rem;color:var(--tx3)">Age ${a.age}</span>
-              </div>
-              <div style="display:flex;align-items:center;gap:.5rem">
-                <span style="font-family:'JetBrains Mono',monospace;font-size:.8rem;font-weight:700;color:${col}">Risk ${a.score}%</span>
-                <span style="font-size:.68rem;padding:2px 8px;border-radius:99px;background:${bg};border:1px solid ${bc};color:${col};text-transform:uppercase;letter-spacing:.06em;font-family:'JetBrains Mono',monospace">${a.status}</span>
-              </div>
-            </div>
-            <div style="font-size:.82rem;color:var(--tx2);margin-bottom:.5rem">Dx: <strong style="color:var(--tx)">${a.dx}</strong></div>
-            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem">
-              <div style="font-size:.78rem;color:var(--tx3)">🎯 ${a.action}</div>
-              <div style="display:flex;gap:.4rem">
-                <span style="font-size:.65rem;color:var(--tx4);font-family:'JetBrains Mono',monospace">${a.since}</span>
-                <button onclick="showToast('📋 Viewing ${a.patient} record','info')" style="font-size:.75rem;background:none;border:none;color:${col};cursor:pointer;text-decoration:underline">View Patient →</button>
-                <button onclick="dismissAlert(${a.id},this)" style="font-size:.75rem;background:none;border:none;color:var(--tx3);cursor:pointer">Dismiss</button>
-              </div>
-            </div>
-          </div>`;
-        }).join('')}
+      <div id="_riskRows" style="display:flex;flex-direction:column;gap:.65rem;max-height:380px;overflow-y:auto;padding-right:.25rem">
+        <div style="text-align:center;padding:2rem;color:var(--tx3)">⏳</div>
       </div>
-
       <div class="modal-foot">
         <button class="btn btn-ghost" onclick="document.getElementById('riskAlertsModal').classList.remove('open')">Close</button>
         <button class="btn btn-danger" onclick="showToast('📞 Escalation sent to on-call oncologist','ok')">📞 Escalate All Critical</button>
@@ -3370,6 +3433,18 @@ function openRiskAlerts() {
   document.body.appendChild(modal);
   setTimeout(() => modal.classList.add('open'), 10);
   modal.addEventListener('click', e => { if (e.target === modal) modal.classList.remove('open'); });
+
+  // ── Fetch live patients from Supabase ──────────────────────────────────────
+  let patients = await sbLoadPatients();
+
+  // Fallback to already-loaded in-memory list, then demo data
+  if (!patients || !patients.length) patients = _allPatients && _allPatients.length ? _allPatients : DEMO_PATIENTS;
+
+  // ── Populate badges & rows ─────────────────────────────────────────────────
+  const badgesEl = document.getElementById('_riskBadges');
+  const rowsEl   = document.getElementById('_riskRows');
+  if (badgesEl) badgesEl.innerHTML = _buildAlertBadges(patients);
+  if (rowsEl)   rowsEl.innerHTML   = _buildAlertRows(patients);
 }
 
 window.dismissAlert = function(id, btn) {
