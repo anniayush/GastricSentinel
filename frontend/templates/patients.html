@@ -6,6 +6,7 @@
 <title>Gastric Sentinel — Patients</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 </head>
 <body>
 
@@ -201,7 +202,7 @@
 
     <div class="modal-foot">
       <button class="btn btn-ghost" onclick="closeModal('patientModal')">Cancel</button>
-      <button class="btn btn-primary" id="addPatientBtn">Register Patient</button>
+      <button class="btn btn-primary" id="addPatientBtn" onclick="submitPatient()">Register Patient</button>
     </div>
   </div>
 </div>
@@ -235,36 +236,13 @@
 
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 <script>
-  // Load full patient list on this page
+  // loadRecentPatients() fetches from Supabase then calls refreshPatientStats()
+  // which correctly updates all four stat cards (Total, High, Medium, Low).
+  // loadPatientStats() has been removed — it was calling /stats (Flask/MongoDB)
+  // which returned wrong data and overwrote the correct Supabase counts.
   document.addEventListener('DOMContentLoaded', () => {
     loadRecentPatients();
-    loadPatientStats();
   });
-
-  async function loadPatientStats() {
-    try {
-      const res = await fetch('/stats');
-      const data = await res.json();
-      const total = data.total_patients || 0;
-      const high  = data.high_risk || 0;
-      const mid   = data.medium_risk || 0;
-      const low   = total - high - mid;
-      animateCounter(document.getElementById('ptStatTotal'), total);
-      animateCounter(document.getElementById('ptStatHigh'),  high);
-      animateCounter(document.getElementById('ptStatMid'),   Math.max(mid,0));
-      animateCounter(document.getElementById('ptStatLow'),   Math.max(low,0));
-    } catch {
-      // fallback: count from DEMO_PATIENTS
-      const pts = typeof DEMO_PATIENTS !== 'undefined' ? DEMO_PATIENTS : [];
-      const h = pts.filter(p=>p.risk==='high').length;
-      const m = pts.filter(p=>p.risk==='mid').length;
-      animateCounter(document.getElementById('ptStatTotal'), pts.length);
-      animateCounter(document.getElementById('ptStatHigh'),  h);
-      animateCounter(document.getElementById('ptStatMid'),   m);
-      animateCounter(document.getElementById('ptStatLow'),   pts.length - h - m);
-    }
-  }
 </script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 </body>
 </html>
