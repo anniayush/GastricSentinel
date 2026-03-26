@@ -2,8 +2,8 @@
 //  Replace the two values below with your project credentials.
 //  Dashboard → Settings → API → Project URL & anon/public key
 
-const SUPABASE_URL  = 'create your url in supabase dashboard and paste here';
-const SUPABASE_ANON = 'create your anon key in supabase dashboard and paste here';
+const SUPABASE_URL  = 'https://xqobdsessewpfvzoqngj.supabase.co';
+const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhxb2Jkc2Vzc2V3cGZ2em9xbmdqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5MzYyNzEsImV4cCI6MjA4OTUxMjI3MX0.xj8eAg9d_nPePiJHOT5S5pZvocrYkWNxc-fa3LeVUSk';
 
 // Lazy-init: the client is created once on first use so the
 // script works even if the Supabase CDN hasn't loaded yet.
@@ -282,21 +282,69 @@ async function loadDashboardStats() {
   if (aEl) { aEl.textContent = '94.2%'; }
 
   updatePatientBadges(total, highRisk);
-  loadRecentPatients();
+
+  // ── Render 5 most-recent patients from Supabase into dashboard table ──
+  _allPatients = patients;
+  _renderDashboardPatients(patients);
+}
+
+// ── Render 5 most recent patients in dashboard table (no pagination) ──────────
+function _renderDashboardPatients(patients) {
+  const tbody = document.getElementById('patientsTable');
+  if (!tbody) return;
+
+  const recent = patients.slice(0, 5);
+
+  if (!recent.length) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--tx3);padding:2rem">
+      <div style="font-size:1.5rem;margin-bottom:.5rem">📭</div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:.8rem">No patients registered yet</div>
+      <div style="font-size:.75rem;margin-top:.3rem">Add a patient to get started</div>
+    </td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = recent.map((raw, i) => {
+    const p = normPatient(raw, i);
+    return `<tr onclick="window.location.href='/patients'" style="cursor:pointer">
+      <td class="mono" style="color:var(--c1);font-size:.8rem">${p.id}</td>
+      <td><div class="pt-cell">${ptAvatar(p.name, i)}<span>${p.name}</span></div></td>
+      <td>${p.age}</td>
+      <td>${p.genderStr}</td>
+      <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${p.last}">${p.last}</td>
+      <td>${riskBadge(p.risk)}</td>
+      <td><div class="table-actions">
+        <button class="btn btn-icon btn-ghost btn-sm" onclick="event.stopPropagation();editPatient('${p.id}')" title="Edit">✏️</button>
+        <button class="btn btn-icon btn-danger btn-sm" onclick="event.stopPropagation();deletePatient(this,'${p.id}')" title="Delete">🗑</button>
+      </div></td>
+    </tr>`;
+  }).join('');
+
+  // Update "View all" link with live count
+  const viewAll = document.querySelector('a.card-action[href="/patients"]');
+  if (viewAll) viewAll.textContent = `View all ${patients.length} →`;
+
+  // Remove any stale pagination bar from dashboard
+  document.getElementById('_ptPagBar')?.remove();
 }
 
 function updatePatientBadges(total, highRisk) {
-  // Update all nav-badge elements for patients
+  // Sidebar patient count badge
   document.querySelectorAll('.nav-link').forEach(link => {
     if (link.textContent.includes('Patients')) {
       const badge = link.querySelector('.nav-badge');
       if (badge) badge.textContent = total;
     }
   });
-  // Update status chip in topbar if on patients page
+  // Topbar status chip — update on both dashboard and patients page
   const statusChip = document.querySelector('.status-chip');
-  if (statusChip && window.location.pathname.includes('patients')) {
-    statusChip.innerHTML = `<div class="status-dot"></div> ${total} Active`;
+  if (statusChip) {
+    const onDashboard = document.getElementById('patientsCount') && !window.location.pathname.includes('patients');
+    if (onDashboard) {
+      // Keep dashboard chip as "AI Online"
+    } else {
+      statusChip.innerHTML = `<div class="status-dot"></div> ${total} Active`;
+    }
   }
 }
 
@@ -387,16 +435,26 @@ async function loadRecentPatients(forcedData) {
   _currentPage = 1;
 
   renderPatientPage();
-  refreshPatientStats();
+  await refreshPatientStats();   // await so stats always reflect the freshly loaded data
   setTimeout(() => { initPatientSearch?.(); }, 80);
 }
 
 // ── Recount stats from live _allPatients and update the four cards ────────────
-function refreshPatientStats() {
-  const pts = _allPatients || [];
+// If _allPatients is empty (page just loaded), fetches from Supabase first.
+async function refreshPatientStats() {
+  // If data hasn't loaded yet, fetch it now directly from Supabase
+  let pts = _allPatients || [];
+  if (!pts.length) {
+    const fresh = await sbLoadPatients();
+    if (fresh && fresh.length) {
+      _allPatients = fresh;
+      pts = fresh;
+    }
+  }
+
   const total = pts.length;
   const high  = pts.filter(p => (p.risk || '').toLowerCase() === 'high').length;
-  const mid   = pts.filter(p => ['mid','medium'].includes((p.risk || '').toLowerCase())).length;
+  const mid   = pts.filter(p => ['mid', 'medium'].includes((p.risk || '').toLowerCase())).length;
   const low   = pts.filter(p => (p.risk || '').toLowerCase() === 'low').length;
 
   const tEl = document.getElementById('ptStatTotal');
@@ -408,11 +466,13 @@ function refreshPatientStats() {
   if (mEl) animateCounter(mEl, mid);
   if (lEl) animateCounter(lEl, low);
 
-  // Keep topbar "Active" chip in sync
+  // Topbar Active chip
   const chip = document.querySelector('.status-chip');
-  if (chip) chip.innerHTML = `<div class="status-dot"></div> ${total} Active`;
+  if (chip && window.location.pathname.includes('patients')) {
+    chip.innerHTML = `<div class="status-dot"></div> ${total} Active`;
+  }
 
-  // Keep patientsCount (dashboard) in sync
+  // Dashboard patientsCount badge
   const cntEl = document.getElementById('patientsCount');
   if (cntEl && cntEl.textContent !== String(total)) animateCounter(cntEl, total);
 }
@@ -441,8 +501,11 @@ function _getFilteredPatients() {
   });
 }
 
-// ── Render one page of the filtered list ─────────────────────────────────────
+// ── Render one page of the filtered list (patients page only) ────────────────
 function renderPatientPage() {
+  // Skip on dashboard — _renderDashboardPatients() handles that table
+  if (document.getElementById('patientsCount') && !window.location.pathname.includes('patients')) return;
+
   const tbody = document.getElementById('patientsTable');
   if (!tbody) return;
 
@@ -466,16 +529,18 @@ function renderPatientPage() {
     tbody.innerHTML = pageRows.map((raw, i) => {
       const gi = start + i;
       const p  = normPatient(raw, gi);
-      const extraCol = isDashboard ? '' :
-        `<td style="font-family:'JetBrains Mono',monospace;font-size:.72rem;color:var(--tx3)">${p.date || '—'}</td>`;
+      // Format date as YYYY-MM-DD, stripping any time component
+      const dateStr = p.date ? String(p.date).slice(0, 10) : '—';
+      const scanCol = isDashboard ? '' :
+        `<td style="font-family:'JetBrains Mono',monospace;font-size:.72rem;color:var(--tx3)">${dateStr}</td>`;
       return `<tr onclick="viewPatient('${p.id}')">
         <td class="mono" style="color:var(--c1);font-size:.8rem">${p.id}</td>
         <td><div class="pt-cell">${ptAvatar(p.name, gi)}<span>${p.name}</span></div></td>
         <td>${p.age}</td>
         <td>${p.genderStr}</td>
         <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${p.last}">${p.last}</td>
-        ${extraCol}
         <td>${riskBadge(p.risk)}</td>
+        ${scanCol}
         <td><div class="table-actions">
           <button class="btn btn-icon btn-ghost btn-sm" onclick="event.stopPropagation();editPatient('${p.id}')" title="Edit">✏️</button>
           <button class="btn btn-icon btn-danger btn-sm" onclick="event.stopPropagation();deletePatient(this,'${p.id}')" title="Delete">🗑</button>
@@ -708,10 +773,21 @@ async function deletePatient(btn, id) {
     } catch { showToast('🗑 Patient removed (demo mode)', 'info'); }
   }
 
-  // Remove from cache, re-render, refresh stats
+  // Remove from cache, then refresh the correct table
   _allPatients = _allPatients.filter(p => p.id !== id);
-  renderPatientPage();
-  refreshPatientStats();
+  const onDashboard = document.getElementById('patientsCount') && !window.location.pathname.includes('patients');
+  if (onDashboard) {
+    _renderDashboardPatients(_allPatients);
+    updatePatientBadges(
+      _allPatients.length,
+      _allPatients.filter(p => (p.risk || '').toLowerCase() === 'high').length
+    );
+    const pEl = document.getElementById('patientsCount');
+    if (pEl) animateCounter(pEl, _allPatients.length);
+  } else {
+    renderPatientPage();
+    refreshPatientStats();
+  }
 }
 
 // ── Add Patient ──────────────────────────────
@@ -722,6 +798,50 @@ function openAddPatient() {
 function closeModal(id) {
   const modal = document.getElementById(id || 'patientModal');
   if (modal) modal.classList.remove('open');
+}
+
+// ── Infer risk level + score from free-text condition ───────────────────────
+// Handles inputs like "Stage 4 Cancer", "stage II adenocarcinoma",
+// "High-Grade Dysplasia", "Chronic Gastritis", "Normal Mucosa", etc.
+function inferRiskFromCondition(cond) {
+  if (!cond) return { risk: 'low', risk_score: 15, tier: 'NORMAL' };
+
+  const t = cond.toLowerCase();
+
+  // ── Cancer stage detection (Stage I–IV, 1–4) ──────────────────────────────
+  const stageMatch = t.match(/stage\s*(iv|iii|ii|i|4|3|2|1)\b/i);
+  if (stageMatch) {
+    const s = stageMatch[1].toLowerCase();
+    if (s === 'iv' || s === '4') return { risk: 'high',  risk_score: 95, tier: 'CRITICAL'   };
+    if (s === 'iii'|| s === '3') return { risk: 'high',  risk_score: 85, tier: 'CRITICAL'   };
+    if (s === 'ii' || s === '2') return { risk: 'mid',   risk_score: 65, tier: 'SUSPICIOUS' };
+    if (s === 'i'  || s === '1') return { risk: 'mid',   risk_score: 50, tier: 'SUSPICIOUS' };
+  }
+
+  // ── Keyword-based rules ───────────────────────────────────────────────────
+  const HIGH_RISK = [
+    'adenocarcinoma', 'carcinoma', 'cancer', 'malignant', 'malignancy',
+    'metastasis', 'metastatic', 'high-grade dysplasia', 'high grade dysplasia',
+    'signet ring', 'lymphoma', 'sarcoma', 'tumor', 'tumour',
+  ];
+  const MID_RISK = [
+    'dysplasia', 'low-grade dysplasia', 'low grade dysplasia',
+    'intestinal metaplasia', 'metaplasia', 'barrett', 'atrophic gastritis',
+    'ulcer', 'peptic ulcer', 'polyp', 'adenoma', 'h. pylori', 'h pylori',
+    'helicobacter', 'suspicious', 'precancerous', 'pre-cancerous',
+  ];
+  const LOW_RISK = [
+    'chronic gastritis', 'gastritis', 'normal mucosa', 'normal',
+    'reflux', 'gerd', 'mild inflammation', 'superficial gastritis',
+    'benign', 'follow-up', 'routine',
+  ];
+
+  for (const kw of HIGH_RISK) if (t.includes(kw)) return { risk: 'high', risk_score: 88, tier: 'CRITICAL'   };
+  for (const kw of MID_RISK)  if (t.includes(kw)) return { risk: 'mid',  risk_score: 55, tier: 'SUSPICIOUS' };
+  for (const kw of LOW_RISK)  if (t.includes(kw)) return { risk: 'low',  risk_score: 18, tier: 'NORMAL'     };
+
+  // Default: unknown condition → watch / low
+  return { risk: 'low', risk_score: 20, tier: 'NORMAL' };
 }
 
 async function submitPatient() {
@@ -737,15 +857,18 @@ async function submitPatient() {
 
   const newId = await sbNextPatientId();
 
+  // ── Derive risk from condition text ────────────────────────────────────────
+  const { risk, risk_score, tier } = inferRiskFromCondition(cond);
+
   const patientRow = {
     id:             newId,
     name,
     age:            parseInt(age),
     gender,
     last_diagnosis: cond || null,
-    risk:           'low',
-    risk_score:     null,
-    tier:           null,
+    risk,
+    risk_score,
+    tier,
     last_scan:      new Date().toISOString().slice(0, 10),
   };
 
@@ -757,7 +880,7 @@ async function submitPatient() {
       const res = await fetch('/add_patient', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ name, age: parseInt(age), gender, condition: cond, risk: 'low' }),
+        body:    JSON.stringify({ name, age: parseInt(age), gender, condition: cond, risk, risk_score }),
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       registerSuccess = true;
@@ -776,7 +899,13 @@ async function submitPatient() {
 
   _showRegistrationCard({ id: newId, name, age, gender, cond, success: registerSuccess });
 
-  await loadRecentPatients(null);  // also calls refreshPatientStats() internally
+  // Reload the correct table depending on which page we're on
+  const onDash = document.getElementById('patientsCount') && !window.location.pathname.includes('patients');
+  if (onDash) {
+    await loadDashboardStats();
+  } else {
+    await loadRecentPatients(null);
+  }
 }
 
 function _showRegistrationCard({ id, name, age, gender, cond, success }) {
@@ -2472,22 +2601,155 @@ let chatOpen = false;
 function toggleChat() {
   chatOpen = !chatOpen;
   const win = document.getElementById('chatWindow');
-  if (win) win.classList.toggle('hidden', !chatOpen);
+  const fab = document.getElementById('chatFab');
+  if (win) {
+    win.classList.toggle('hidden', !chatOpen);
+    if (chatOpen) {
+      win.style.animation = 'chatSlideUp .25s cubic-bezier(.34,1.56,.64,1)';
+      _positionChatWindow();
+    }
+  }
+  if (fab) fab.style.transform = chatOpen ? 'scale(1.08) rotate(20deg)' : 'scale(1) rotate(0deg)';
 }
 
 function closeChat() {
   chatOpen = false;
-  document.getElementById('chatWindow')?.classList.add('hidden');
+  const win = document.getElementById('chatWindow');
+  const fab = document.getElementById('chatFab');
+  if (win) win.classList.add('hidden');
+  if (fab) fab.style.transform = 'scale(1) rotate(0deg)';
+}
+
+function _positionChatWindow() {
+  const fab = document.getElementById('chatFab');
+  const win = document.getElementById('chatWindow');
+  if (!fab || !win || win.classList.contains('hidden')) return;
+  const fabRect = fab.getBoundingClientRect();
+  const winW = win.offsetWidth  || 340;
+  const winH = win.offsetHeight || 480;
+  const margin = 12;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  let top  = fabRect.top - winH - margin;
+  let left = fabRect.right - winW;
+  if (top  < margin)           top  = fabRect.bottom + margin;
+  if (left < margin)           left = margin;
+  if (left + winW > vw - margin) left = vw - winW - margin;
+  if (top  + winH > vh - margin) top  = vh - winH - margin;
+  win.style.position = 'fixed';
+  win.style.top      = top  + 'px';
+  win.style.left     = left + 'px';
+  win.style.bottom   = 'auto';
+  win.style.right    = 'auto';
 }
 
 function initChat() {
-  const input = document.getElementById('chatInput');
-  const sendBtn = document.getElementById('chatSend');
+  const input    = document.getElementById('chatInput');
+  const sendBtn  = document.getElementById('chatSend');
+  const fab      = document.getElementById('chatFab');
+  const closeBtn = document.getElementById('chatClose');
+  const panel    = fab && fab.closest('.chatbot-panel') || document.querySelector('.chatbot-panel');
 
   if (input) {
-    input.addEventListener('keypress', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }});
+    input.addEventListener('keypress', e => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
+    });
   }
-  sendBtn?.addEventListener('click', sendChatMessage);
+  sendBtn && sendBtn.addEventListener('click', sendChatMessage);
+  if (closeBtn) {
+    const nc = closeBtn.cloneNode(true);
+    closeBtn.parentNode.replaceChild(nc, closeBtn);
+    nc.addEventListener('click', closeChat);
+  }
+
+  if (!document.getElementById('_chatFabCSS')) {
+    const s = document.createElement('style');
+    s.id = '_chatFabCSS';
+    s.textContent = [
+      '.chatbot-panel { pointer-events:none; }',
+      '.chatbot-panel .chat-fab, .chatbot-panel .chat-window { pointer-events:all; }',
+      '.chat-fab { cursor:grab !important; user-select:none; touch-action:none;',
+      '  transition:transform .2s cubic-bezier(.34,1.56,.64,1), box-shadow .2s ease !important; }',
+      '.chat-fab:hover { transform:scale(1.12) translateY(-3px) !important;',
+      '  box-shadow:0 8px 24px rgba(0,212,255,.4) !important; }',
+      '.chat-fab:active { cursor:grabbing !important; }',
+      '.chat-fab.is-dragging { cursor:grabbing !important; transform:scale(1.15) !important;',
+      '  box-shadow:0 12px 32px rgba(0,212,255,.55) !important; transition:box-shadow .15s ease !important; }',
+      '@keyframes chatSlideUp {',
+      '  from { opacity:0; transform:translateY(16px) scale(.96); }',
+      '  to   { opacity:1; transform:translateY(0)    scale(1);   } }'
+    ].join('\n');
+    document.head.appendChild(s);
+  }
+
+  if (!fab || !panel) return;
+
+  panel.style.cssText += ';position:fixed;bottom:1.5rem;right:1.5rem;left:auto;top:auto;z-index:9999;';
+
+  let isDragging = false, dragMoved = false;
+  let startX, startY, origLeft, origTop;
+  const THRESHOLD = 6;
+
+  function getPointer(e) { return e.touches ? e.touches[0] : e; }
+
+  function onDown(e) {
+    if (e.button !== undefined && e.button !== 0) return;
+    const pt = getPointer(e);
+    startX = pt.clientX;
+    startY = pt.clientY;
+    isDragging = true;
+    dragMoved  = false;
+    const rect = panel.getBoundingClientRect();
+    origLeft = rect.left;
+    origTop  = rect.top;
+    panel.style.left   = origLeft + 'px';
+    panel.style.top    = origTop  + 'px';
+    panel.style.right  = 'auto';
+    panel.style.bottom = 'auto';
+    document.addEventListener('mousemove', onMove, { passive: false });
+    document.addEventListener('mouseup',   onUp);
+    document.addEventListener('touchmove', onMove, { passive: false });
+    document.addEventListener('touchend',  onUp);
+  }
+
+  function onMove(e) {
+    if (!isDragging) return;
+    e.preventDefault();
+    const pt = getPointer(e);
+    const dx = pt.clientX - startX;
+    const dy = pt.clientY - startY;
+    if (!dragMoved && Math.sqrt(dx*dx + dy*dy) < THRESHOLD) return;
+    dragMoved = true;
+    fab.classList.add('is-dragging');
+    const pw = panel.offsetWidth  || 80;
+    const ph = panel.offsetHeight || 80;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    panel.style.left = Math.max(0, Math.min(vw - pw, origLeft + dx)) + 'px';
+    panel.style.top  = Math.max(0, Math.min(vh - ph, origTop  + dy)) + 'px';
+    if (chatOpen) _positionChatWindow();
+  }
+
+  function onUp() {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup',   onUp);
+    document.removeEventListener('touchmove', onMove);
+    document.removeEventListener('touchend',  onUp);
+    fab.classList.remove('is-dragging');
+    fab.style.transform = chatOpen ? 'scale(1.08) rotate(20deg)' : 'scale(1) rotate(0deg)';
+    isDragging = false;
+    if (!dragMoved) toggleChat();
+    dragMoved = false;
+    if (chatOpen) setTimeout(_positionChatWindow, 10);
+  }
+
+  const newFab = fab.cloneNode(true);
+  fab.parentNode.replaceChild(newFab, fab);
+  newFab.addEventListener('mousedown',  onDown);
+  newFab.addEventListener('touchstart', onDown, { passive: false });
+  newFab.setAttribute('title', 'Drag to move  \u00b7  Click to open');
+
+  window.addEventListener('resize', function() { if (chatOpen) _positionChatWindow(); });
 }
 
 async function sendChatMessage() {
@@ -3089,65 +3351,128 @@ function reportCustomHTML() {
 // ══════════════════════════════════════════════
 // RISK ALERTS PANEL
 // ══════════════════════════════════════════════
-const RISK_ALERTS = [
-  { id:1, patient:'Kiran Desai',   pid:'P-0037', age:67, dx:'Adenocarcinoma',       score:94, status:'critical', action:'Immediate oncology referral', since:'2h ago' },
-  { id:2, patient:'Arjun Mehta',   pid:'P-0041', age:58, dx:'High-Grade Dysplasia', score:82, status:'urgent',   action:'Endoscopic resection consult', since:'4h ago' },
-  { id:3, patient:'Priya Sharma',  pid:'P-0040', age:44, dx:'Chronic Gastritis',    score:45, status:'watch',    action:'H. pylori test + follow-up',   since:'1d ago' },
-  { id:4, patient:'Sunita Patel',  pid:'P-0038', age:51, dx:'Low-Grade Dysplasia',  score:38, status:'watch',    action:'Biopsy repeat in 3 months',    since:'1d ago' },
-  { id:5, patient:'Raj Verma',     pid:'P-0035', age:71, dx:'High-Grade Dysplasia', score:79, status:'urgent',   action:'ESD evaluation scheduled',     since:'2d ago' },
-];
+// ── Risk alert helpers ────────────────────────
+// Derives alert status + recommended action from a patient record.
+function _riskAlertStatus(p) {
+  const risk = (p.risk || '').toLowerCase();
+  const riskScore = typeof p.risk_score === 'number'
+    ? p.risk_score
+    : risk === 'high' ? 85 : risk === 'mid' || risk === 'medium' ? 45 : 20;
 
-function openRiskAlerts() {
-  const existing = document.getElementById('riskAlertsModal');
-  if (existing) { existing.classList.add('open'); return; }
+  let status, action;
+  if (riskScore >= 80 || risk === 'high') {
+    status = riskScore >= 90 ? 'critical' : 'urgent';
+    action = riskScore >= 90 ? 'Immediate oncology referral' : 'Endoscopic resection consult';
+  } else if (riskScore >= 35 || risk === 'mid' || risk === 'medium') {
+    status = 'watch';
+    const dx = (p.last || p.diagnosis || '').toLowerCase();
+    action = dx.includes('gastritis') ? 'H. pylori test + follow-up' : 'Biopsy repeat in 3 months';
+  } else {
+    return null; // low-risk patients don't appear in Risk Alert Centre
+  }
+  return { status, action, riskScore };
+}
+
+// Formats an ISO date string as a relative "X ago" label.
+function _relativeTime(iso) {
+  if (!iso) return '';
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60)  return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24)   return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
+// Builds the inner HTML for the alert list using live patient data.
+function _buildAlertRows(patients) {
+  // Filter to only alertable patients and sort: critical → urgent → watch
+  const ORDER = { critical: 0, urgent: 1, watch: 2 };
+  const alerts = patients
+    .map((raw, i) => {
+      const p = normPatient(raw, i);
+      const info = _riskAlertStatus(raw);
+      if (!info) return null;
+      return { ...info, patient: p.name, pid: p.id, age: p.age,
+               dx: p.last || raw.diagnosis || 'Unknown', since: _relativeTime(raw.updated_at || raw.date) };
+    })
+    .filter(Boolean)
+    .sort((a, b) => ORDER[a.status] - ORDER[b.status]);
+
+  if (!alerts.length) {
+    return `<div style="text-align:center;padding:2rem;color:var(--tx3);font-family:'JetBrains Mono',monospace;font-size:.82rem">
+      ✅ No active risk alerts
+    </div>`;
+  }
+
+  return alerts.map((a, idx) => {
+    const col = a.status==='critical'?'var(--c3)':a.status==='urgent'?'var(--c4)':'var(--c1)';
+    const bg  = a.status==='critical'?'rgba(255,61,110,.07)':a.status==='urgent'?'rgba(255,179,64,.07)':'rgba(0,212,255,.05)';
+    const bc  = a.status==='critical'?'rgba(255,61,110,.25)':a.status==='urgent'?'rgba(255,179,64,.2)':'rgba(0,212,255,.18)';
+    return `
+    <div data-alert-idx="${idx}" style="background:${bg};border:1px solid ${bc};border-radius:var(--r);padding:.9rem 1rem;border-left:3px solid ${col}">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.4rem;flex-wrap:wrap;gap:.4rem">
+        <div style="display:flex;align-items:center;gap:.6rem">
+          <span style="font-weight:600;color:var(--tx);font-size:.9rem">${a.patient}</span>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:.7rem;color:var(--c1)">${a.pid}</span>
+          <span style="font-size:.72rem;color:var(--tx3)">Age ${a.age}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:.5rem">
+          <span style="font-family:'JetBrains Mono',monospace;font-size:.8rem;font-weight:700;color:${col}">Risk ${a.riskScore}%</span>
+          <span style="font-size:.68rem;padding:2px 8px;border-radius:99px;background:${bg};border:1px solid ${bc};color:${col};text-transform:uppercase;letter-spacing:.06em;font-family:'JetBrains Mono',monospace">${a.status}</span>
+        </div>
+      </div>
+      <div style="font-size:.82rem;color:var(--tx2);margin-bottom:.5rem">Dx: <strong style="color:var(--tx)">${a.dx}</strong></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem">
+        <div style="font-size:.78rem;color:var(--tx3)">🎯 ${a.action}</div>
+        <div style="display:flex;gap:.4rem">
+          ${a.since ? `<span style="font-size:.65rem;color:var(--tx4);font-family:'JetBrains Mono',monospace">${a.since}</span>` : ''}
+          <button onclick="window.location.href='/patients'" style="font-size:.75rem;background:none;border:none;color:${col};cursor:pointer;text-decoration:underline">View Patient →</button>
+          <button onclick="dismissAlert(${idx},this)" style="font-size:.75rem;background:none;border:none;color:var(--tx3);cursor:pointer">Dismiss</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// Builds the summary badge row (Critical: N · Urgent: N · Watch: N).
+function _buildAlertBadges(patients) {
+  let critical = 0, urgent = 0, watch = 0;
+  patients.forEach((raw, i) => {
+    const info = _riskAlertStatus(raw);
+    if (!info) return;
+    if (info.status === 'critical') critical++;
+    else if (info.status === 'urgent') urgent++;
+    else watch++;
+  });
+  return `
+    <span style="background:rgba(255,61,110,.12);color:var(--c3);border:1px solid rgba(255,61,110,.3);border-radius:99px;padding:3px 10px;font-size:.75rem;font-family:'JetBrains Mono',monospace">● Critical: ${critical}</span>
+    <span style="background:rgba(255,179,64,.12);color:var(--c4);border:1px solid rgba(255,179,64,.3);border-radius:99px;padding:3px 10px;font-size:.75rem;font-family:'JetBrains Mono',monospace">● Urgent: ${urgent}</span>
+    <span style="background:rgba(0,212,255,.12);color:var(--c1);border:1px solid rgba(0,212,255,.3);border-radius:99px;padding:3px 10px;font-size:.75rem;font-family:'JetBrains Mono',monospace">● Watch: ${watch}</span>`;
+}
+
+async function openRiskAlerts() {
+  // Always destroy stale modal so it re-renders with fresh data
+  document.getElementById('riskAlertsModal')?.remove();
 
   const modal = document.createElement('div');
   modal.id = 'riskAlertsModal';
   modal.className = 'modal-backdrop';
+
+  // Show the shell immediately with a loading state
   modal.innerHTML = `
     <div class="modal" style="max-width:660px">
       <div class="modal-hd">
         <div class="modal-title">⚠️ Risk Alert Centre</div>
         <button class="modal-x" onclick="document.getElementById('riskAlertsModal').classList.remove('open')">✕</button>
       </div>
-
-      <div style="display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap">
-        <span style="background:rgba(255,61,110,.12);color:var(--c3);border:1px solid rgba(255,61,110,.3);border-radius:99px;padding:3px 10px;font-size:.75rem;font-family:'JetBrains Mono',monospace">● Critical: 1</span>
-        <span style="background:rgba(255,179,64,.12);color:var(--c4);border:1px solid rgba(255,179,64,.3);border-radius:99px;padding:3px 10px;font-size:.75rem;font-family:'JetBrains Mono',monospace">● Urgent: 2</span>
-        <span style="background:rgba(0,212,255,.12);color:var(--c1);border:1px solid rgba(0,212,255,.3);border-radius:99px;padding:3px 10px;font-size:.75rem;font-family:'JetBrains Mono',monospace">● Watch: 2</span>
+      <div id="_riskBadges" style="display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap">
+        <span style="color:var(--tx3);font-size:.8rem;font-family:'JetBrains Mono',monospace">Loading from Supabase…</span>
       </div>
-
-      <div style="display:flex;flex-direction:column;gap:.65rem;max-height:380px;overflow-y:auto;padding-right:.25rem">
-        ${RISK_ALERTS.map(a => {
-          const col = a.status==='critical'?'var(--c3)':a.status==='urgent'?'var(--c4)':'var(--c1)';
-          const bg  = a.status==='critical'?'rgba(255,61,110,.07)':a.status==='urgent'?'rgba(255,179,64,.07)':'rgba(0,212,255,.05)';
-          const bc  = a.status==='critical'?'rgba(255,61,110,.25)':a.status==='urgent'?'rgba(255,179,64,.2)':'rgba(0,212,255,.18)';
-          return `
-          <div style="background:${bg};border:1px solid ${bc};border-radius:var(--r);padding:.9rem 1rem;border-left:3px solid ${col}">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.4rem;flex-wrap:wrap;gap:.4rem">
-              <div style="display:flex;align-items:center;gap:.6rem">
-                <span style="font-weight:600;color:var(--tx);font-size:.9rem">${a.patient}</span>
-                <span style="font-family:'JetBrains Mono',monospace;font-size:.7rem;color:var(--c1)">${a.pid}</span>
-                <span style="font-size:.72rem;color:var(--tx3)">Age ${a.age}</span>
-              </div>
-              <div style="display:flex;align-items:center;gap:.5rem">
-                <span style="font-family:'JetBrains Mono',monospace;font-size:.8rem;font-weight:700;color:${col}">Risk ${a.score}%</span>
-                <span style="font-size:.68rem;padding:2px 8px;border-radius:99px;background:${bg};border:1px solid ${bc};color:${col};text-transform:uppercase;letter-spacing:.06em;font-family:'JetBrains Mono',monospace">${a.status}</span>
-              </div>
-            </div>
-            <div style="font-size:.82rem;color:var(--tx2);margin-bottom:.5rem">Dx: <strong style="color:var(--tx)">${a.dx}</strong></div>
-            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem">
-              <div style="font-size:.78rem;color:var(--tx3)">🎯 ${a.action}</div>
-              <div style="display:flex;gap:.4rem">
-                <span style="font-size:.65rem;color:var(--tx4);font-family:'JetBrains Mono',monospace">${a.since}</span>
-                <button onclick="showToast('📋 Viewing ${a.patient} record','info')" style="font-size:.75rem;background:none;border:none;color:${col};cursor:pointer;text-decoration:underline">View Patient →</button>
-                <button onclick="dismissAlert(${a.id},this)" style="font-size:.75rem;background:none;border:none;color:var(--tx3);cursor:pointer">Dismiss</button>
-              </div>
-            </div>
-          </div>`;
-        }).join('')}
+      <div id="_riskRows" style="display:flex;flex-direction:column;gap:.65rem;max-height:380px;overflow-y:auto;padding-right:.25rem">
+        <div style="text-align:center;padding:2rem;color:var(--tx3)">⏳</div>
       </div>
-
       <div class="modal-foot">
         <button class="btn btn-ghost" onclick="document.getElementById('riskAlertsModal').classList.remove('open')">Close</button>
         <button class="btn btn-danger" onclick="showToast('📞 Escalation sent to on-call oncologist','ok')">📞 Escalate All Critical</button>
@@ -3157,6 +3482,18 @@ function openRiskAlerts() {
   document.body.appendChild(modal);
   setTimeout(() => modal.classList.add('open'), 10);
   modal.addEventListener('click', e => { if (e.target === modal) modal.classList.remove('open'); });
+
+  // ── Fetch live patients from Supabase ──────────────────────────────────────
+  let patients = await sbLoadPatients();
+
+  // Fallback to already-loaded in-memory list, then demo data
+  if (!patients || !patients.length) patients = _allPatients && _allPatients.length ? _allPatients : DEMO_PATIENTS;
+
+  // ── Populate badges & rows ─────────────────────────────────────────────────
+  const badgesEl = document.getElementById('_riskBadges');
+  const rowsEl   = document.getElementById('_riskRows');
+  if (badgesEl) badgesEl.innerHTML = _buildAlertBadges(patients);
+  if (rowsEl)   rowsEl.innerHTML   = _buildAlertRows(patients);
 }
 
 window.dismissAlert = function(id, btn) {
@@ -3677,9 +4014,12 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Page-specific
-  if (document.getElementById('patientsCount')) loadDashboardStats();
-  if (document.getElementById('patientsTable') && !document.getElementById('patientsCount')) {
-    loadRecentPatients(DEMO_PATIENTS);
+  if (document.getElementById('patientsCount')) {
+    // Dashboard — load from Supabase and render recent 5 patients
+    loadDashboardStats();
+  } else if (document.getElementById('patientsTable')) {
+    // Patients page — load full paginated list from Supabase
+    loadRecentPatients(null);
     setTimeout(initPatientSearch, 400);
   }
 
@@ -3699,8 +4039,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('downloadReport')?.addEventListener('click', downloadReport);
   document.getElementById('confirmBtn')?.addEventListener('click', () => submitFeedback('confirm'));
   document.getElementById('incorrectBtn')?.addEventListener('click', () => submitFeedback('incorrect'));
-  document.getElementById('chatFab')?.addEventListener('click', toggleChat);
-  document.getElementById('chatClose')?.addEventListener('click', closeChat);
+  // chatFab and chatClose are wired inside initChat() with drag support
   document.getElementById('addPatientBtn')?.addEventListener('click', submitPatient);
   document.getElementById('openAddModal')?.addEventListener('click', openAddPatient);
   document.getElementById('modalCloseBtn')?.addEventListener('click', () => closeModal('patientModal'));

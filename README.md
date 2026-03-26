@@ -23,7 +23,7 @@ Gastric cancer is one of the leading causes of cancer-related deaths worldwide. 
 - 🔥 **Grad-CAM Visualizations** — gradient-weighted heatmaps highlight the tissue regions driving each prediction
 - 📊 **SHAP Explainability** — SHAP values reveal which genomic and clinical features most influence the model's decision
 - 🤖 **Integrated Chatbot** — conversational assistant to guide users through the platform and help interpret results
-- 🗄️ **MongoDB Atlas** — cloud-hosted NoSQL database for storing user data, predictions, and session records
+- 🗄️ **Supabase** — opensource Backend-as-a-service(BaaS),built as postgresSQL creates backend instantly.real time API,database,Authentication
 - 🌐 **Full-Stack Web App** — clean, responsive frontend with a Python-powered REST API backend
 - 📁 **Modular Architecture** — clearly separated `frontend`, `backend`, and `training` modules
 
