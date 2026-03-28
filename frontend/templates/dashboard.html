@@ -6,6 +6,7 @@
 <title>Gastric Sentinel — Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 </head>
 <body>
 
@@ -310,7 +311,7 @@
     </div>
     <div class="modal-foot">
       <button class="btn btn-ghost" onclick="closeModal('patientModal')">Cancel</button>
-      <button class="btn btn-primary" id="addPatientBtn">+ Add Patient</button>
+      <button class="btn btn-primary" id="addPatientBtn" onclick="submitPatient()">+ Add Patient</button>
     </div>
   </div>
 </div>
@@ -344,5 +345,10 @@
 </div>
 
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    loadDashboardStats();
+  });
+</script>
 </body>
 </html>
