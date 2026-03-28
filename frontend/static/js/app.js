@@ -1,9 +1,9 @@
-//  SUPABASE CLIENT
+ //  SUPABASE CLIENT
 //  Replace the two values below with your project credentials.
 //  Dashboard → Settings → API → Project URL & anon/public key
 
-const SUPABASE_URL  = 'https://xqobdsessewpfvzoqngj.supabase.co';
-const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhxb2Jkc2Vzc2V3cGZ2em9xbmdqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5MzYyNzEsImV4cCI6MjA4OTUxMjI3MX0.xj8eAg9d_nPePiJHOT5S5pZvocrYkWNxc-fa3LeVUSk';
+const SUPABASE_URL  = 'give your url';
+const SUPABASE_ANON = 'give your anon key';
 
 // Lazy-init: the client is created once on first use so the
 // script works even if the Supabase CDN hasn't loaded yet.
@@ -283,9 +283,50 @@ async function loadDashboardStats() {
 
   updatePatientBadges(total, highRisk);
 
+  // ── Update risk distribution bars from live data ──────────────────────────
+  updateDashboardRiskBars(patients);
+
   // ── Render 5 most-recent patients from Supabase into dashboard table ──
   _allPatients = patients;
   _renderDashboardPatients(patients);
+}
+
+// ── Update dashboard risk distribution bars from live patient data ─────────────
+function updateDashboardRiskBars(patients) {
+  const total = patients.length || 1; // avoid divide by zero
+  const high  = patients.filter(p => (p.risk || '').toLowerCase() === 'high').length;
+  const mid   = patients.filter(p => ['mid', 'medium'].includes((p.risk || '').toLowerCase())).length;
+  const low   = patients.filter(p => (p.risk || '').toLowerCase() === 'low').length;
+
+  // Bar widths as % of total (capped at 100)
+  const highPct = Math.round((high / total) * 100);
+  const midPct  = Math.round((mid  / total) * 100);
+  const lowPct  = Math.round((low  / total) * 100);
+
+  // Update count labels (e.g. "12 patients")
+  document.querySelectorAll('.risk-pct').forEach(el => {
+    const row = el.closest('.risk-row');
+    if (!row) return;
+    const name = row.querySelector('.risk-name')?.textContent?.toLowerCase() || '';
+    if (name.includes('high'))   el.textContent = `${high} patient${high   !== 1 ? 's' : ''}`;
+    if (name.includes('medium') || name.includes('mid')) el.textContent = `${mid} patient${mid !== 1 ? 's' : ''}`;
+    if (name.includes('low'))    el.textContent = `${low} patient${low   !== 1 ? 's' : ''}`;
+  });
+
+  // Animate the fill bars
+  document.querySelectorAll('.risk-fill').forEach(bar => {
+    const row = bar.closest('.risk-row');
+    if (!row) return;
+    const name = row.querySelector('.risk-name')?.textContent?.toLowerCase() || '';
+    let pct = 0;
+    if (name.includes('high'))                           pct = highPct;
+    else if (name.includes('medium') || name.includes('mid')) pct = midPct;
+    else if (name.includes('low'))                       pct = lowPct;
+    bar.setAttribute('data-w', pct);
+    // Animate
+    bar.style.width = '0';
+    setTimeout(() => { bar.style.width = pct + '%'; }, 200);
+  });
 }
 
 // ── Render 5 most recent patients in dashboard table (no pagination) ──────────
@@ -778,6 +819,7 @@ async function deletePatient(btn, id) {
   const onDashboard = document.getElementById('patientsCount') && !window.location.pathname.includes('patients');
   if (onDashboard) {
     _renderDashboardPatients(_allPatients);
+    updateDashboardRiskBars(_allPatients);
     updatePatientBadges(
       _allPatients.length,
       _allPatients.filter(p => (p.risk || '').toLowerCase() === 'high').length
@@ -1388,20 +1430,26 @@ function _showHighRiskBanner(score, diagnosis, predictedClass) {
 // ── Drag & Drop Upload ───────────────────────
 function initUpload() {
   const zone = document.getElementById('dropZone');
-  const input = document.getElementById('fileInput');
+  let input = document.getElementById('fileInput');
   const preview = document.getElementById('uploadPreview');
 
   if (!zone) return;
 
   zone.addEventListener('click', e => {
     if (e.target.classList.contains('remove-img')) return;
-    input?.click();
+    // Reset value so selecting the same file again always fires 'change'
+    input = document.getElementById('fileInput');
+    if (input) {
+      input.value = '';
+      input.click();
+    }
   });
   zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
   zone.addEventListener('dragleave', e => { if (!zone.contains(e.relatedTarget)) zone.classList.remove('drag-over'); });
   zone.addEventListener('drop', e => {
     e.preventDefault();
     zone.classList.remove('drag-over');
+    input = document.getElementById('fileInput');
     if (input && e.dataTransfer.files.length) {
       const dt = new DataTransfer();
       [...e.dataTransfer.files].forEach(f => dt.items.add(f));
@@ -1409,7 +1457,11 @@ function initUpload() {
       handleFiles(input.files);
     }
   });
-  input?.addEventListener('change', () => handleFiles(input.files));
+
+  // Use document-level delegation so it still works after input is reset
+  document.addEventListener('change', e => {
+    if (e.target.id === 'fileInput') handleFiles(e.target.files);
+  });
 
   function handleFiles(files) {
     if (!preview) return;
@@ -1426,9 +1478,11 @@ function initUpload() {
     imgFiles.forEach((f, i) => {
       const reader = new FileReader();
       reader.onload = ev => {
-        // Save data URL globally so PDF generator can always access it
-        if (i === 0) window._lastScanDataUrl = ev.target.result;
-        // Full-width image with overlay remove button
+        // Save data URL immediately so runScan() can always access it
+        if (i === 0) {
+          window._lastScanDataUrl = ev.target.result;
+          window._lastScanFile    = f;
+        }
         const wrap = document.createElement('div');
         wrap.style.cssText = 'position:relative;width:100%;border-radius:10px;overflow:hidden';
         wrap.innerHTML = `
@@ -1460,13 +1514,19 @@ window.resetUploadZone = function(btn) {
   if (!zone || !preview) return;
   preview.innerHTML = '';
   preview.style.cssText = '';
-  window._lastScanDataUrl = null;  // clear saved scan image
+  window._lastScanDataUrl = null;
+  window._lastScanFile    = null;
   // Show drop UI again
   zone.querySelector('.upload-icon-wrap') && (zone.querySelector('.upload-icon-wrap').style.display = '');
   zone.querySelector('.upload-title')     && (zone.querySelector('.upload-title').style.display = '');
   zone.querySelector('.upload-hint')      && (zone.querySelector('.upload-hint').style.display = '');
-  const fileInput = document.getElementById('fileInput');
-  if (fileInput) fileInput.value = '';
+  // Fully reset the file input by replacing it so the same file can be selected again
+  const oldInput = document.getElementById('fileInput');
+  if (oldInput) {
+    const newInput = oldInput.cloneNode(true);
+    newInput.value = '';
+    oldInput.parentNode.replaceChild(newInput, oldInput);
+  }
   showToast('🗑 Image removed', 'info');
 };
 
